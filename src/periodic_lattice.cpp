@@ -1,8 +1,7 @@
 #include "periodic_lattice_export.h"
 #include "periodic_lattice_internal.h"
 
-#include "../../constants.h"
-#include <tensorbox.h>
+#include "helper.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -162,7 +161,7 @@ namespace PeriodicBox
 
   void get_absolute_coord_from_fractional_coord(double absolute[3], const double fractional[3], const double unit_cell[9])
   {
-    TCTensor::mkl_dgemv('N', 3, 3, 1.0, unit_cell, 3, fractional, 1, 0.0, absolute, 1);
+    dgemv('N', 3, 3, 1.0, unit_cell, 3, fractional, 1, 0.0, absolute, 1);
   }
 
   static void get_cube_bound(int positive_bound[3], int negative_bound[3],
@@ -182,8 +181,8 @@ namespace PeriodicBox
 
     double positive_direction_lattice_basis[9];
     double negative_direction_lattice_basis[9];
-    TCTensor::mkl_dgemm('T', 'N', 3, 3, 3, 1.0, P_inverse_T, 3, positive_direction_standard_basis, 3, 0.0, positive_direction_lattice_basis, 3);
-    TCTensor::mkl_dgemm('T', 'N', 3, 3, 3, 1.0, P_inverse_T, 3, negative_direction_standard_basis, 3, 0.0, negative_direction_lattice_basis, 3);
+    dgemm('T', 'N', 3, 3, 3, 1.0, P_inverse_T, 3, positive_direction_standard_basis, 3, 0.0, positive_direction_lattice_basis, 3);
+    dgemm('T', 'N', 3, 3, 3, 1.0, P_inverse_T, 3, negative_direction_standard_basis, 3, 0.0, negative_direction_lattice_basis, 3);
 
     for (int i = 0; i < 3; i++)
     {
@@ -203,8 +202,8 @@ namespace PeriodicBox
                                                                   const double radius,
                                                                   const bool remove_origin)
   {
-    int positive_direction_lattice_bound[3] { 0.0, 0.0, 0.0 };
-    int negative_direction_lattice_bound[3] { 0.0, 0.0, 0.0 };
+    int positive_direction_lattice_bound[3] { 0, 0, 0 };
+    int negative_direction_lattice_bound[3] { 0, 0, 0 };
 
     double min_norm_origin[3];
     get_min_norm_lattice_image_real(unit_cell, origin_offset_absolute, min_norm_origin);
@@ -222,7 +221,7 @@ namespace PeriodicBox
           if (remove_origin && i_x == 0 && i_y == 0 && i_z == 0)
             continue;
 
-          const double fractional_v[3] { i_x, i_y, i_z };
+          const double fractional_v[3] { (double)i_x, (double)i_y, (double)i_z };
           double absolute_v[3];
           get_absolute_coord_from_fractional_coord(absolute_v, fractional_v, unit_cell.real_space);
           double absolute_v_plus_C[3];
@@ -243,8 +242,8 @@ namespace PeriodicBox
   std::vector<double3> compute_lattice_vectors_within_sphere_reciprocal(const LatticeVector unit_cell,
                                                                         const double radius)
   {
-    int positive_direction_lattice_bound[3] { 0.0, 0.0, 0.0 };
-    int negative_direction_lattice_bound[3] { 0.0, 0.0, 0.0 };
+    int positive_direction_lattice_bound[3] { 0, 0, 0 };
+    int negative_direction_lattice_bound[3] { 0, 0, 0 };
 
     const double origin[3] { 0.0, 0.0, 0.0 };
     get_cube_bound(positive_direction_lattice_bound, negative_direction_lattice_bound,
@@ -260,7 +259,7 @@ namespace PeriodicBox
           if (i_x == 0 && i_y == 0 && i_z == 0)
             continue;
 
-          const double fractional_v[3] { i_x, i_y, i_z };
+          const double fractional_v[3] { (double)i_x, (double)i_y, (double)i_z };
           double absolute_v[3];
           get_absolute_coord_from_fractional_coord(absolute_v, fractional_v, unit_cell.reciprocal_space);
           if (NORM2(absolute_v) < r2)
