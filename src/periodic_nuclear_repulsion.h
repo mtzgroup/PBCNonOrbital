@@ -10,6 +10,13 @@ namespace PeriodicBox
                                   const PeriodicParameter periodic_parameter,
                                   const int n_charge,
                                   const double* charge_xyzc);
+
+  void PeriodicNuclearRepulsionGradient(const double full_range_scale,
+                                        const double long_range_scale,
+                                        const PeriodicParameter periodic_parameter,
+                                        const int n_charge,
+                                        const double* charge_xyzc,
+                                        double* gradient);
 }
 
 #endif
