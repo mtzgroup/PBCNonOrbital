@@ -3,7 +3,7 @@
 
 #include "periodic_types.h"
 
-#include <normc.h> // From intbox, for PI
+#include "helper.h" // For PI
 
 #include <math.h>
 

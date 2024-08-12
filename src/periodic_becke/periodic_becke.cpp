@@ -1,8 +1,7 @@
 #include "periodic_becke.h"
 
-#include <cilk_omp_macro.h>
-#include <gpubox.h>
-// #include <vecpool.h>
+#include "../helper.h"
+#include "../gpubox.h"
 
 namespace PeriodicBox
 {

@@ -3,9 +3,8 @@
 #include "../periodic_grid.h"
 #include "../periodic_types.h" // For LatticeVector
 
-#include <utils.h> // From intbox, for CUERR
-
-#include <gpubox.h>
+#include "../helper.h" // For CUERR
+#include "../gpubox.h"
 
 static inline int min(const int a, const int b) { return (a < b) ? a : b; }
 
@@ -59,5 +58,12 @@ namespace PeriodicBox
         for (int i_global = i_thread, i_local = 0; i_global < n_point_total; i_global += n_thread, i_local++) {
             points[i_global].w_total = h_point_w[i_local];
         }
+
+        gpu->cpuFree(h_point_atom_center_index);
+        gpu->cpuFree(h_point_x);
+        gpu->gpuFree(d_point_atom_center_index);
+        gpu->gpuFree(d_point_x);
+        gpu->gpuFree(d_interatomic_quantities);
+        gpu->gpuFree(d_atoms);
     }
 }

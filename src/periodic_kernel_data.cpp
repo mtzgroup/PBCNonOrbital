@@ -14,12 +14,12 @@ namespace PeriodicBox
   : omega_(omega),
     one_over_omega_2_(1.0 / omega / omega),
     scale_(scale),
-    lattice_real_{ lattice.real_space[0], lattice.real_space[1], lattice.real_space[2],
-                    lattice.real_space[3], lattice.real_space[4], lattice.real_space[5],
-                    lattice.real_space[6], lattice.real_space[7], lattice.real_space[8], },
-    lattice_reciprocal_{ lattice.reciprocal_space[0], lattice.reciprocal_space[1], lattice.reciprocal_space[2],
-                          lattice.reciprocal_space[3], lattice.reciprocal_space[4], lattice.reciprocal_space[5],
-                          lattice.reciprocal_space[6], lattice.reciprocal_space[7], lattice.reciprocal_space[8], }
+    lattice_real_{ (FType)lattice.real_space[0], (FType)lattice.real_space[1], (FType)lattice.real_space[2],
+                   (FType)lattice.real_space[3], (FType)lattice.real_space[4], (FType)lattice.real_space[5],
+                   (FType)lattice.real_space[6], (FType)lattice.real_space[7], (FType)lattice.real_space[8], },
+    lattice_reciprocal_{ (FType)lattice.reciprocal_space[0], (FType)lattice.reciprocal_space[1], (FType)lattice.reciprocal_space[2],
+                         (FType)lattice.reciprocal_space[3], (FType)lattice.reciprocal_space[4], (FType)lattice.reciprocal_space[5],
+                         (FType)lattice.reciprocal_space[6], (FType)lattice.reciprocal_space[7], (FType)lattice.reciprocal_space[8], }
   {}
   template PeriodicKernelDataGeneral<float >::PeriodicKernelDataGeneral(const double omega, const double scale, const LatticeVector lattice);
   template PeriodicKernelDataGeneral<double>::PeriodicKernelDataGeneral(const double omega, const double scale, const LatticeVector lattice);

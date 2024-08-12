@@ -2,7 +2,7 @@
 
 #include "../periodic_kernel_data_cu.h"
 
-#include <gpubox.h>
+#include "../gpubox.h"
 
 namespace PeriodicBox
 {

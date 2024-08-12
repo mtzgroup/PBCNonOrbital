@@ -4,8 +4,7 @@
 #include "periodic_lattice_internal.h"
 #include "periodic_becke/periodic_becke.h"
 
-#include <distance_cutoff.h> // From gridbox, for BOX_LENGTH
-#include <utils.h> // From intbox, for DIE()
+#include "helper.h" // For BOX_LENGTH, DIE()
 
 #include <string.h> // For memcpy()
 #include <math.h>
