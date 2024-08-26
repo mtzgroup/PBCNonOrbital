@@ -11,9 +11,9 @@ int main()
     lattice.a = 5.5220 / BohrToAng;
     lattice.b = 5.4396 / BohrToAng;
     lattice.c = 7.6726 / BohrToAng;
-    lattice.alpha = 90.0   * PI / 180.0;
+    lattice.alpha =  90.00 * PI / 180.0;
     lattice.beta  = 110.55 * PI / 180.0;
-    lattice.gamma = 90.0   * PI / 180.0;
+    lattice.gamma =  90.00 * PI / 180.0;
     PeriodicBox::LatticeInfoMethods::calculate_lattice_vector(&lattice);
     PeriodicBox::LatticeInfoMethods::print(lattice);
 
@@ -103,6 +103,7 @@ int main()
 
     delete[] analytical_gradient;
     delete[] numerical_gradient;
+    delete[] xyzc_copy;
 
     return 0;
 }

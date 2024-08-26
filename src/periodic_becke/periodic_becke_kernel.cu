@@ -172,7 +172,7 @@ namespace PeriodicBox
         interatomic_quantity_kernel<<<grid_dimension, block_dimension>>>(d_atoms, n_atom, d_interatomic_quantities);
     }
 
-//     // For Gradient
+    // For gradient
 
 //     __global__ void Wgrad_cache(const int numPoints, const int numAtoms, const int grad_pitch,
 //                                 const double* xpts, const double* ypts, const double* zpts, const float4* d_atoms,
@@ -249,6 +249,17 @@ namespace PeriodicBox
 //         return grad;
 //     }
 
+    static __device__ double switch_function_derivative(const double m)
+    {
+        const double f1 = 1.5 *  m - 0.5 * m*m*m;
+        const double f2 = 1.5 * f1 - 0.5 * f1*f1*f1;
+        const double f3 = 1.5 * f2 - 0.5 * f2*f2*f2;
+        const double s = 0.5 * (1.0 - f3);
+        if (fabs(s) < 1.0e-14)
+            return 0.0;
+        else
+            return -(27.0/16.0) * (1.0 - f2*f2) * (1.0 - f1*f1) * (1.0 - m*m) / s;
+    }
 //     __device__ double Dev_comp_t(double mu_ij, double a_ij)
 //     {
 //         double t;
