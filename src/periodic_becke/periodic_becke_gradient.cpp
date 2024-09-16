@@ -76,80 +76,66 @@ namespace PeriodicBox
         remaining_gpu_memory_bytes -= sizeof(double) * n_atom * n_atom;  // d_interatomic_quantities
         remaining_gpu_memory_bytes -= n_point_job * (4 * sizeof(double) + sizeof(int)); // d_point_xyzw and d_i_atom_for_point
 
-    //     int bytes_per_pt = 2*(n_atom+1)*sizeof(double) + 3*n_atom*sizeof(double);
-    //     int maxPts = remaining_gpu_memory_bytes / bytes_per_pt;
-    //     int pts_per_grid;
-    //     if (n_point_job < maxPts)
-    //         pts_per_grid = n_point_job;
-    //     else
-    //         pts_per_grid = (maxPts / WGRAD_BLOCK_XDIM_DP) * WGRAD_BLOCK_XDIM_DP;
-    //     pts_per_grid = min(pts_per_grid, MAX_WT_GRID_DIM*WGRAD_BLOCK_XDIM_DP);
+        const int n_bytes_per_point = 4 * n_atom * sizeof(double); // d_gradient_cache_xyzp
+        const int max_points_for_job = remaining_gpu_memory_bytes / n_bytes_per_point;
+        int n_point_per_grid;
+        if (n_point_job < max_points_for_job)
+            n_point_per_grid = n_point_job;
+        else
+            n_point_per_grid = (max_points_for_job / weight_gradient_block_x_dimension) * weight_gradient_block_x_dimension;
+        n_point_per_grid = min(n_point_per_grid, weight_gradient_max_grid_dimension * weight_gradient_block_x_dimension);
 
-    //     double*  d_rval = (double*)gpu->gpuAlloc(sizeof(double)*pts_per_grid*(n_atom+1));
-    //     double*  d_pval = (double*)gpu->gpuAlloc(sizeof(double)*pts_per_grid*(n_atom+1));
-    //     double* d_xGrad = (double*)gpu->gpuAlloc(sizeof(double)*pts_per_grid*n_atom);
-    //     double* d_yGrad = (double*)gpu->gpuAlloc(sizeof(double)*pts_per_grid*n_atom);
-    //     double* d_zGrad = (double*)gpu->gpuAlloc(sizeof(double)*pts_per_grid*n_atom);
-    //     cudaMemset(d_xGrad, 0, sizeof(double)*n_atom*pts_per_grid); CUERR;
-    //     cudaMemset(d_yGrad, 0, sizeof(double)*n_atom*pts_per_grid); CUERR;
-    //     cudaMemset(d_zGrad, 0, sizeof(double)*n_atom*pts_per_grid); CUERR;
+        double* d_gradient_cache_xyzp = (double*)gpu->gpuAlloc(sizeof(double) * n_point_per_grid * n_atom * 4);
+        double* d_gradient_cache_x = d_gradient_cache_xyzp + n_point_per_grid * n_atom * 0;
+        double* d_gradient_cache_y = d_gradient_cache_xyzp + n_point_per_grid * n_atom * 1;
+        double* d_gradient_cache_z = d_gradient_cache_xyzp + n_point_per_grid * n_atom * 2;
+        double* d_p_cache          = d_gradient_cache_xyzp + n_point_per_grid * n_atom * 3;
+        cudaMemset(d_gradient_cache_x, 0, sizeof(double) * n_point_per_grid * n_atom); CUERR;
+        cudaMemset(d_gradient_cache_y, 0, sizeof(double) * n_point_per_grid * n_atom); CUERR;
+        cudaMemset(d_gradient_cache_z, 0, sizeof(double) * n_point_per_grid * n_atom); CUERR;
 
-    //     dim3 grid_dim;
-    //     grid_dim.y = n_atom / WGRAD_BLOCK_YDIM_DP;
-    //     if (n_atom % WGRAD_BLOCK_YDIM_DP)
-    //         grid_dim.y++;
-    //     dim3 block_dim(WGRAD_BLOCK_XDIM_DP, WGRAD_BLOCK_YDIM_DP);
+        dim3 grid_dim;
+        grid_dim.y = n_atom / weight_gradient_block_y_dimension;
+        if (n_atom % weight_gradient_block_y_dimension != 0)
+            grid_dim.y++;
+        const dim3 block_dim(weight_gradient_block_x_dimension, weight_gradient_block_y_dimension);
 
-    //     for (int j=0; j<n_point_job; j+=pts_per_grid) {
-    //         int npts = min(pts_per_grid, n_point_job-j);
-    //         grid_dim.x = npts / WGRAD_BLOCK_XDIM_DP;
-    //         if( npts % WGRAD_BLOCK_XDIM_DP )
-    //             grid_dim.x++;
-    //         int ptctr_grid_dim = npts / WGRAD_PTCTR_BLOCK;
-    //         if( npts % WGRAD_PTCTR_BLOCK )
-    //             ptctr_grid_dim++;
-    //         cudaThreadSynchronize(); CUERR;
+        for (int i_grid = 0; i_grid < n_point_job; i_grid += n_point_per_grid) {
+            const int n_point_this_grid = min(n_point_per_grid, n_point_job - i_grid);
+            grid_dim.x = n_point_this_grid / weight_gradient_block_x_dimension;
+            if (n_point_this_grid % weight_gradient_block_x_dimension != 0)
+                grid_dim.x++;
 
-    //         Wgrad_cache_caller(grid_dim, block_dim, npts, n_atom, pts_per_grid,
-    //                         d_point_x+j, d_point_y+j, d_point_z+j, d_atoms,
-    //                         d_rval, d_pval, d_interatomic_quantities, W_THRE); CUERR;
+            cudaDeviceSynchronize(); CUERR;
+            weight_gradient_cache(grid_dim, block_dim, n_point_this_grid, n_atom, n_point_per_grid,
+                                  d_point_x + i_grid, d_point_y + i_grid, d_point_z + i_grid, d_atoms,
+                                  d_p_cache, d_interatomic_quantities, default_switch_function_threshold, default_image_cutoff_radius, unit_cell); CUERR;
 
-    //         Wgrad_kernel_caller(grid_dim, block_dim, npts, n_atom, pts_per_grid,
-    //                             d_point_x+j, d_point_y+j, d_point_z+j, d_point_w+j, d_atoms,
-    //                             d_i_atom_for_point+j, d_xGrad, d_yGrad, d_zGrad,
-    //                             d_rval, d_pval, d_interatomic_quantities); CUERR;
+            weight_gradient_compute(grid_dim, block_dim, n_point_this_grid, n_atom, n_point_per_grid,
+                                    d_point_x + i_grid, d_point_y + i_grid, d_point_z + i_grid, d_point_w + i_grid, d_atoms,
+                                    d_i_atom_for_point + i_grid, d_gradient_cache_x, d_gradient_cache_y, d_gradient_cache_z,
+                                    d_p_cache, d_interatomic_quantities, default_image_cutoff_radius, unit_cell); CUERR;
 
-    //         Wgrad_ptctr_caller(ptctr_grid_dim, WGRAD_PTCTR_BLOCK, npts, n_atom,
-    //                         pts_per_grid, d_i_atom_for_point+j, d_xGrad, d_yGrad, d_zGrad); CUERR;
-    //     }
+            // Center atom gradient
+            int center_atom_kernel_grid_dim = n_point_this_grid / weight_gradient_center_atom_block_dimension;
+            if (n_point_this_grid % weight_gradient_center_atom_block_dimension != 0)
+                center_atom_kernel_grid_dim++;
+            weight_gradient_center_atom(center_atom_kernel_grid_dim, weight_gradient_center_atom_block_dimension, n_point_this_grid, n_atom,
+                                        n_point_per_grid, d_i_atom_for_point + i_grid, d_gradient_cache_x, d_gradient_cache_y, d_gradient_cache_z); CUERR;
+        }
 
-    //     double* h_grads = (double*)gpu->cpuAlloc(sizeof(double)*n_atom*3);
-    //     double* h_xGrad = (double*)gpu->cpuAlloc(sizeof(double)*n_atom*pts_per_grid);
-    //     double* h_yGrad = (double*)gpu->cpuAlloc(sizeof(double)*n_atom*pts_per_grid);
-    //     double* h_zGrad = (double*)gpu->cpuAlloc(sizeof(double)*n_atom*pts_per_grid);
-    //     cudaMemcpy(h_xGrad, d_xGrad, sizeof(double)*n_atom*pts_per_grid, cudaMemcpyDeviceToHost); CUERR;
-    //     cudaMemcpy(h_yGrad, d_yGrad, sizeof(double)*n_atom*pts_per_grid, cudaMemcpyDeviceToHost); CUERR;
-    //     cudaMemcpy(h_zGrad, d_zGrad, sizeof(double)*n_atom*pts_per_grid, cudaMemcpyDeviceToHost); CUERR;
+        double* h_gradient = (double*)gpu->cpuAlloc(sizeof(double) * n_atom * 3);
+        double* d_gradient = (double*)gpu->gpuAlloc(sizeof(double) * n_atom * 3);
+        weight_gradient_sum_over_point(n_atom * 3, weight_gradient_sum_over_point_dimension, n_point_per_grid, d_gradient,
+                                       d_gradient_cache_x, d_gradient_cache_y, d_gradient_cache_z); CUERR;
 
-    //     double* d_grads = (double*)gpu->gpuAlloc(sizeof(double)*n_atom*3);
-    //     int sums_grid_dim = n_atom*3;
-    //     Wgrad_dosums_caller(sums_grid_dim, WGRAD_DOSUMS_BLOCK, pts_per_grid, d_grads,
-    //                         d_xGrad, d_yGrad, d_zGrad); CUERR;
+        cudaMemcpy(h_gradient, d_gradient, sizeof(double) * n_atom * 3, cudaMemcpyDeviceToHost); CUERR;
+        for (int i = 0; i < n_atom * 3; i++)
+            gradient[i] += h_gradient[i];
 
-    //     cudaMemcpy(h_grads, d_grads, sizeof(double)*n_atom*3, cudaMemcpyDeviceToHost); CUERR;
-    //     for (int j=0; j<n_atom*3; ++j)
-    //         gradient[j] += (double)h_grads[j];
-
-    //     gpu->gpuFree(d_grads);
-    //     gpu->cpuFree(h_zGrad);
-    //     gpu->cpuFree(h_yGrad);
-    //     gpu->cpuFree(h_xGrad);
-    //     gpu->cpuFree(h_grads);
-    //     gpu->gpuFree(d_zGrad);
-    //     gpu->gpuFree(d_yGrad);
-    //     gpu->gpuFree(d_xGrad);
-    //     gpu->gpuFree(d_pval);
-    //     gpu->gpuFree(d_rval);
+        gpu->gpuFree(d_gradient);
+        gpu->cpuFree(h_gradient);
+        gpu->gpuFree(d_gradient_cache_xyzp);
         gpu->gpuFree(d_i_atom_for_point);
         gpu->gpuFree(d_point_xyzw);
         gpu->cpuFree(h_i_atom_for_point);

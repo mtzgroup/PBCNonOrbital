@@ -1,16 +1,6 @@
 #ifndef PERIODIC_BECKE_PERIODIC_GRID_KERNEL_H_
 #define PERIODIC_BECKE_PERIODIC_GRID_KERNEL_H_
 
-// #define DFT_BOX_THRE 0
-// #define MAX_WT_GRID_DIM 65535
-
-// #define WGRAD_PTCTR_BLOCK   256
-// #define WGRAD_DOSUMS_BLOCK  256
-// #define WGRAD_BLOCK_YDIM_SP   1
-// #define WGRAD_BLOCK_XDIM_SP 128
-// #define WGRAD_BLOCK_YDIM_DP   1
-// #define WGRAD_BLOCK_XDIM_DP 128
-
 #include "../periodic_types.h" // For LatticeVector
 
 #include <vector_types.h> // For float4
@@ -32,19 +22,28 @@ namespace PeriodicBox
                  double* d_weight, const double* d_interatomic_quantities,
                  const double switch_function_threshold, const double image_cutoff_radius,
                  const LatticeVector unit_cell);
-    // void Wgrad_ptctr_caller(const int GRID, const int BLOCK, const int numPoints, const int numAtoms, const int grad_pitch, const int* ctrs,
-    //                         double* xGrad, double* yGrad, double* zGrad);
-    // void Wgrad_dosums_caller(const int GRID, const int BLOCK, const int numPoints, double* final_grad,
-    //                         const double* xGrad, const double* yGrad, const double* zGrad);
-    // void Wgrad_cache_caller(const dim3 GRID, const dim3 BLOCK, const int numPoints, const int numAtoms, const int grad_pitch,
-    //                         const double* xpts, const double* ypts, const double* zpts, const float4* c_atom,
-    //                         double* ra_cache, double* p_cache,
-    //                         const double2* cache, const double w_thre);
-    // void Wgrad_kernel_caller(const dim3 GRID, const dim3 BLOCK, const int numPoints, const int numAtoms, const int grad_pitch, 
-    //                         const double* xpts, const double* ypts, const double* zpts, const double* wpts,
-    //                         const float4* c_atom, const int* ctrs,
-    //                         double* xGrad, double* yGrad, double* zGrad,
-    //                         const double* ra_cache, const double* p_cache, const double2* cache);
+
+    const int weight_gradient_block_x_dimension = 128;
+    const int weight_gradient_block_y_dimension = 1;
+    const int weight_gradient_max_grid_dimension = 65535;
+    const int weight_gradient_center_atom_block_dimension = 256;
+    const int weight_gradient_sum_over_point_dimension = 256;
+
+    void weight_gradient_cache(const dim3 n_grid, const dim3 n_block, const int n_point, const int n_atom, const int n_point_per_grid,
+                               const double* d_point_x, const double* d_point_y, const double* d_point_z, const float4* d_atoms,
+                               double* d_p_cache,
+                               const double* d_interatomic_quantities, const double switch_function_threshold,
+                               const double image_cutoff_radius, const LatticeVector unit_cell);
+    void weight_gradient_compute(const dim3 n_grid, const dim3 n_block, const int n_point, const int n_atom, const int n_point_per_grid, 
+                                 const double* d_point_x, const double* d_point_y, const double* d_point_z, const double* wpts,
+                                 const float4* d_atoms, const int* d_i_atom_for_point,
+                                 double* d_gradient_cache_x, double* d_gradient_cache_y, double* d_gradient_cache_z,
+                                 const double* d_p_cache, const double* d_interatomic_quantities,
+                                 const double image_cutoff_radius, const LatticeVector unit_cell);
+    void weight_gradient_center_atom(const int n_grid, const int n_block, const int n_point, const int n_atom, const int n_point_per_grid, const int* d_i_atom_for_point,
+                                     double* d_gradient_cache_x, double* d_gradient_cache_y, double* d_gradient_cache_z);
+    void weight_gradient_sum_over_point(const int n_grid, const int n_block, const int n_point, double* final_gradient,
+                                        const double* d_gradient_cache_x, const double* d_gradient_cache_y, const double* d_gradient_cache_z);
 }
 
 #endif

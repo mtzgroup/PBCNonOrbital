@@ -174,54 +174,72 @@ namespace PeriodicBox
 
     // For gradient
 
-//     __global__ void Wgrad_cache(const int numPoints, const int numAtoms, const int grad_pitch,
-//                                 const double* xpts, const double* ypts, const double* zpts, const float4* d_atoms,
-//                                 double* ra_cache, double* p_cache,
-//                                 const double2* cache, const double switch_function_threshold)
-//     {
-//         int ptIndex = threadIdx.x+blockIdx.x*WGRAD_BLOCK_XDIM_DP;
-//         if( ptIndex >= numPoints )    return;
-//         int a = threadIdx.y + blockIdx.y*WGRAD_BLOCK_YDIM_DP;
-//         if( a >= numAtoms )    return;
-//         double ptx = xpts[ptIndex];
-//         double pty = ypts[ptIndex];
-//         double ptz = zpts[ptIndex];
-//         float4 temp = d_atoms[a];
+    __global__ void weight_gradient_cache_kernel(const int n_point, const int n_atom, const int n_point_per_grid,
+                                                 const double* d_point_x, const double* d_point_y, const double* d_point_z, const float4* d_atoms,
+                                                 double* d_p_cache,
+                                                 const double* d_interatomic_quantities, const double switch_function_threshold,
+                                                 const double image_cutoff_radius, const PeriodicKernelDataReal<double> periodic_data)
+    {
+        const int i_point = threadIdx.x + blockIdx.x * blockDim.x;
+        if (i_point >= n_point) return;
 
-//         double ra = get_r(temp.x, temp.y, temp.z, ptx, pty, ptz);
-//         ra_cache[ptIndex+grad_pitch*a] = ra;
+        const int i_atom_a = threadIdx.y + blockIdx.y * blockDim.y;
+        if (i_atom_a >= n_atom) return;
 
-//         double pVal = 1.0;
-//         double2 buff = cache[numAtoms*a];
+        const double point[3] { d_point_x[i_point], d_point_y[i_point], d_point_z[i_point]};
+        const double atom_a[3] { d_atoms[i_atom_a].x, d_atoms[i_atom_a].y, d_atoms[i_atom_a].z };
+        const double ra = get_r(atom_a[0], atom_a[1], atom_a[2], point[0], point[1], point[2]);
 
-//         for(int b=0; b<numAtoms; ++b)
-//         {
-//             double2 reg = buff;
-//             int next = b+1;
-//             buff = cache[a*numAtoms+next];
+        double p_a = 1.0;
 
-//             if( a == b )    continue;
+        for (int i_atom_b = 0; i_atom_b < n_atom; i_atom_b++) {
+            const double a_ab = d_interatomic_quantities[i_atom_a * n_atom + i_atom_b];
 
-//             temp = d_atoms[b];
-//             double rb = get_r(temp.x, temp.y, temp.z, ptx, pty, ptz);
-//             double mu = (ra - rb) * reg.x;
-//             double nu = mu + reg.y*(1.0 - mu*mu);
-//             pVal *= switch_function(nu);
-//             if( fabs(pVal) < switch_function_threshold ){
-//                 pVal = 0.0;
-//                 break;
-//             }
-//         }
-//         p_cache[ptIndex+grad_pitch*a] = pVal;
-//     }
+            double atom_b[3] = { d_atoms[i_atom_b].x, d_atoms[i_atom_b].y, d_atoms[i_atom_b].z };
+            periodic_data.move_to_same_image(atom_a, atom_b);
 
-//     void Wgrad_cache_caller(const dim3 GRID, const dim3 BLOCK, const int numPoints, const int numAtoms, const int grad_pitch,
-//                             const double* xpts, const double* ypts, const double* zpts, const float4* d_atoms,
-//                             double* ra_cache, double* p_cache,
-//                             const double2* cache, const double switch_function_threshold)
-//     {
-//         Wgrad_cache<<<GRID, BLOCK>>>(numPoints, numAtoms, grad_pitch, xpts, ypts, zpts, d_atoms, ra_cache, p_cache, cache, switch_function_threshold);
-//     }
+            const double r_ab[3] { atom_b[0] - atom_a[0], atom_b[1] - atom_a[1], atom_b[2] - atom_a[2], };
+            int image2_positive_bound[3] { 0, 0, 0 };
+            int image2_negative_bound[3] { 0, 0, 0 };
+            periodic_data.get_cube_bound_real(image2_positive_bound, image2_negative_bound, r_ab, image_cutoff_radius);
+
+            for (int i_image2_x = -image2_negative_bound[0]; i_image2_x <= image2_positive_bound[0]; i_image2_x++)
+                for (int i_image2_y = -image2_negative_bound[1]; i_image2_y <= image2_positive_bound[1]; i_image2_y++)
+                    for (int i_image2_z = -image2_negative_bound[2]; i_image2_z <= image2_positive_bound[2]; i_image2_z++) {
+                        double lattice_image_b[3];
+                        periodic_data.get_absolute_coord_real(lattice_image_b, i_image2_x, i_image2_y, i_image2_z);
+                        const double atom_b_image[3] = { atom_b[0] + lattice_image_b[0], atom_b[1] + lattice_image_b[1], atom_b[2] + lattice_image_b[2] };
+
+                        if ( (i_atom_a != i_atom_b) ||
+                             !(i_image2_x == 0 && i_image2_y == 0 && i_image2_z == 0) ) {
+                            const double one_over_rab = get_one_over_r(atom_a[0], atom_a[1], atom_a[2], atom_b_image[0], atom_b_image[1], atom_b_image[2]);
+                            const double rb = get_r(atom_b_image[0], atom_b_image[1], atom_b_image[2], point[0], point[1], point[2]);
+                            const double mu = (ra - rb) * one_over_rab;
+                            // Refer to energy section for the details of this equation
+                            const double nu = mu + a_ab * (1.0 - mu * mu);
+                            p_a *= switch_function(nu);
+                            if (p_a < switch_function_threshold) {
+                                p_a = 0.0;
+                                goto jump_out_atom2_image_loop;
+                            }
+                        }
+                    }
+        }
+        jump_out_atom2_image_loop:
+        d_p_cache[i_point + n_point_per_grid * i_atom_a] = p_a;
+    }
+
+    void weight_gradient_cache(const dim3 n_grid, const dim3 n_block, const int n_point, const int n_atom, const int n_point_per_grid,
+                               const double* d_point_x, const double* d_point_y, const double* d_point_z, const float4* d_atoms,
+                               double* d_p_cache,
+                               const double* d_interatomic_quantities, const double switch_function_threshold,
+                               const double image_cutoff_radius, const LatticeVector unit_cell)
+    {
+        const PeriodicKernelDataReal<double> periodic_data(NAN, NAN, NAN, unit_cell);
+        weight_gradient_cache_kernel<<<n_grid, n_block>>>(n_point, n_atom, n_point_per_grid, d_point_x, d_point_y, d_point_z, d_atoms,
+                                                          d_p_cache, d_interatomic_quantities, switch_function_threshold,
+                                                          image_cutoff_radius, periodic_data);
+    }
 
 //     __device__ double3 Dev_grad_nu(int g, double3 rg_vec, double rg, int b, double rb, double d_gb, double a_gb, const float4* d_atoms)
 //     {
@@ -249,7 +267,7 @@ namespace PeriodicBox
 //         return grad;
 //     }
 
-    static __device__ double switch_function_derivative(const double m)
+    static __device__ double switch_function_derivative_over_value(const double m)
     {
         const double f1 = 1.5 *  m - 0.5 * m*m*m;
         const double f2 = 1.5 * f1 - 0.5 * f1*f1*f1;
@@ -275,166 +293,159 @@ namespace PeriodicBox
 //         return t;
 //     }
 
-//     __global__ void Wgrad_kernel(const int numPoints, const int numAtoms, const int grad_pitch,
-//                                 const double* xpts, const double* ypts, const double* zpts, const double* wpts,
-//                                 const float4* d_atoms, const int* ctrs,
-//                                 double* xGrad, double* yGrad, double* zGrad,
-//                                 const double* ra_cache, const double* p_cache, const double2* cache)
-//     {
-//         int ptIndex = threadIdx.x+blockIdx.x*WGRAD_BLOCK_XDIM_DP;
-//         if( ptIndex >= numPoints )    return;
-//         int ctr = ctrs[ptIndex];
-//         int grad_atom = threadIdx.y + blockIdx.y*WGRAD_BLOCK_YDIM_DP;
-//         if( grad_atom >= ctr )     ++grad_atom;
-//         if( grad_atom >= numAtoms )    return;
-//         double ptx = xpts[ptIndex];
-//         double pty = ypts[ptIndex];
-//         double ptz = zpts[ptIndex];
-//         double ptw = wpts[ptIndex];
-//         float4 tAtom;
+    __global__ void weight_gradient_compute_kernel(const int n_point, const int n_atom, const int n_point_per_grid,
+                                                   const double* d_point_x, const double* d_point_y, const double* d_point_z, const double* d_point_w,
+                                                   const float4* d_atoms, const int* d_i_atom_for_point,
+                                                   double* d_gradient_cache_x, double* d_gradient_cache_y, double* d_gradient_cache_z,
+                                                   const double* d_p_cache, const double* d_interatomic_quantities,
+                                                   const double image_cutoff_radius, const PeriodicKernelDataReal<double> periodic_data)
+    {
+        const int i_point = threadIdx.x + blockIdx.x * blockDim.x;
+        if (i_point >= n_point) return;
+        const int i_center_atom = d_i_atom_for_point[i_point];
 
-//         double p_buff = p_cache[ptIndex];
-//         double p_sum = 0.0;
-//         double p_a = p_cache[ptIndex + ctr       * grad_pitch];
-//         double p_g = p_cache[ptIndex + grad_atom * grad_pitch];
+        const int i_derivative_atom = threadIdx.y + blockIdx.y * blockDim.y;
+        if (i_derivative_atom == i_center_atom) return;
+        if (i_derivative_atom >= n_atom) return;
+        const double p_a = d_p_cache[i_point + i_center_atom     * n_point_per_grid];
+        const double p_g = d_p_cache[i_point + i_derivative_atom * n_point_per_grid];
+
+        const double point[3] { d_point_x[i_point], d_point_y[i_point], d_point_z[i_point]};
+
 //         double3 grad_c_w_a;    grad_c_w_a.x = grad_c_w_a.y = grad_c_w_a.z = 0.0f;
 //         double3 grad_c_p_a;    grad_c_p_a.x = grad_c_p_a.y = grad_c_p_a.z = 0.0f;
 //         double3 grad_c_p_g;    grad_c_p_g.x = grad_c_p_g.y = grad_c_p_g.z = 0.0f;
-//         tAtom = d_atoms[grad_atom];
+//         float4 tAtom = d_atoms[i_derivative_atom];
 //         double3 rg_vec;
-//         rg_vec.x = ptx - tAtom.x;
-//         rg_vec.y = pty - tAtom.y;
-//         rg_vec.z = ptz - tAtom.z;
+//         rg_vec.x = point[0] - tAtom.x;
+//         rg_vec.y = point[1] - tAtom.y;
+//         rg_vec.z = point[2] - tAtom.z;
 //         double rg = sqrt(rg_vec.x*rg_vec.x + rg_vec.y*rg_vec.y + rg_vec.z*rg_vec.z);
 
-//         int next = ptIndex;
-//         for (int bcenter=0; bcenter<numAtoms; ++bcenter)
-//         {
-//             double3 grad_c_p_b;
-//             double t;
+//         double p_sum = 0.0;
 
-//             next += grad_pitch;
-//             double p_b = p_buff;     p_buff = p_cache[next];
+        for (int i_atom_b = 0; i_atom_b < n_atom; i_atom_b++)
+        {
+            const double p_b = d_p_cache[i_point + i_atom_b * n_point_per_grid];
 //             p_sum += p_b;
-//             if( (p_b == 0.0f && p_g == 0.0f) || grad_atom == bcenter )
+//             if ( (p_b == 0.0f && p_g == 0.0f) || (i_derivative_atom == i_atom_b) )
 //                 continue;
 
-//             double rb  = ra_cache[ptIndex+bcenter*grad_pitch];
-//             double2 bg = cache[bcenter*numAtoms+grad_atom];
-//             double mu_gb = (rg - rb) * bg.x;
-//             double3 grad_nu = Dev_grad_nu(grad_atom, rg_vec, rg, bcenter, rb, bg.x, -bg.y, d_atoms);
+//             double rb = ra_cache[i_point + i_atom_b * n_point_per_grid];
+//             double a_ab = d_interatomic_quantities[i_atom_b * n_atom + i_derivative_atom];
+//             double mu_gb = (rg - rb) * one_over_rab;
+//             double3 grad_nu = Dev_grad_nu(i_derivative_atom, rg_vec, rg, i_atom_b, rb, one_over_rab, -a_ab, d_atoms);
 
+//             double t;
 //             if( p_g != 0.0f )
 //             {
-//                 t = Dev_comp_t(mu_gb, -bg.y);
+//                 t = Dev_comp_t(mu_gb, -a_ab);
 //                 grad_c_p_g.x += t*grad_nu.x;
 //                 grad_c_p_g.y += t*grad_nu.y;
 //                 grad_c_p_g.z += t*grad_nu.z;
 //             }
 
+//             double3 grad_c_p_b;
 //             if(p_b != 0.0f)
 //             {
-//                 t = -Dev_comp_t(-mu_gb, bg.y)*p_b;
+//                 t = -Dev_comp_t(-mu_gb, a_ab)*p_b;
 //                 grad_c_p_b.x = t * grad_nu.x;
 //                 grad_c_p_b.y = t * grad_nu.y;
 //                 grad_c_p_b.z = t * grad_nu.z;
 
-//                 if(bcenter == ctr)
+//                 if(i_atom_b == i_center_atom)
 //                     grad_c_p_a = grad_c_p_b;
 
 //                 grad_c_w_a.x -= grad_c_p_b.x;
 //                 grad_c_w_a.y -= grad_c_p_b.y;
 //                 grad_c_w_a.z -= grad_c_p_b.z;
 //             }
-//         }
+        }
 //         grad_c_w_a.x -= grad_c_p_g.x*p_g;
 //         grad_c_w_a.y -= grad_c_p_g.y*p_g;
 //         grad_c_w_a.z -= grad_c_p_g.z*p_g;
 
+        const double point_weight = d_point_w[i_point];
 //         double coef1 = p_a / p_sum;
-//         double coef2 = ptw / p_sum;
-//         xGrad[ptIndex+grad_atom*grad_pitch] += coef2*(coef1*grad_c_w_a.x + grad_c_p_a.x);
-//         yGrad[ptIndex+grad_atom*grad_pitch] += coef2*(coef1*grad_c_w_a.y + grad_c_p_a.y);
-//         zGrad[ptIndex+grad_atom*grad_pitch] += coef2*(coef1*grad_c_w_a.z + grad_c_p_a.z);
-//     }
+//         double coef2 = point_weight / p_sum;
+//         d_gradient_cache_x[i_point + i_derivative_atom * n_point_per_grid] += coef2 * (coef1 * grad_c_w_a.x + grad_c_p_a.x);
+//         d_gradient_cache_y[i_point + i_derivative_atom * n_point_per_grid] += coef2 * (coef1 * grad_c_w_a.y + grad_c_p_a.y);
+//         d_gradient_cache_z[i_point + i_derivative_atom * n_point_per_grid] += coef2 * (coef1 * grad_c_w_a.z + grad_c_p_a.z);
+    }
 
-//     void Wgrad_kernel_caller(const dim3 GRID, const dim3 BLOCK, const int numPoints, const int numAtoms, const int grad_pitch, 
-//                             const double* xpts, const double* ypts, const double* zpts, const double* wpts,
-//                             const float4* d_atoms, const int* ctrs,
-//                             double* xGrad, double* yGrad, double* zGrad,
-//                             const double* ra_cache, const double* p_cache, const double2* cache)
-//     {
-//         Wgrad_kernel<<<GRID, BLOCK>>>(numPoints, numAtoms, grad_pitch, xpts, ypts, zpts, wpts, d_atoms,
-//                                     ctrs, xGrad, yGrad, zGrad, ra_cache, p_cache, cache);
-//     }
+    void weight_gradient_compute(const dim3 n_grid, const dim3 n_block, const int n_point, const int n_atom, const int n_point_per_grid, 
+                                 const double* d_point_x, const double* d_point_y, const double* d_point_z, const double* d_point_w,
+                                 const float4* d_atoms, const int* d_i_atom_for_point,
+                                 double* d_gradient_cache_x, double* d_gradient_cache_y, double* d_gradient_cache_z,
+                                 const double* d_p_cache, const double* d_interatomic_quantities,
+                                 const double image_cutoff_radius, const LatticeVector unit_cell)
+    {
+        const PeriodicKernelDataReal<double> periodic_data(NAN, NAN, NAN, unit_cell);
+        weight_gradient_compute_kernel<<<n_grid, n_block>>>(n_point, n_atom, n_point_per_grid, d_point_x, d_point_y, d_point_z, d_point_w, d_atoms, d_i_atom_for_point,
+                                                            d_gradient_cache_x, d_gradient_cache_y, d_gradient_cache_z, d_p_cache, d_interatomic_quantities, image_cutoff_radius, periodic_data);
+    }
 
-//     __global__ void Wgrad_ptctr(const int numPoints, const int numAtoms, const int grad_pitch, const int* ctrs,
-//                                 double* xGrad, double* yGrad, double* zGrad)
-//     {
-//         double x=0.0, y=0.0, z=0.0;
-//         int ptIndex = threadIdx.x + blockIdx.x*WGRAD_PTCTR_BLOCK;
-//         if(ptIndex >= numPoints)    return;
-//         int ctr = ctrs[ptIndex];
+    __global__ void weight_gradient_center_atom_kernel(const int n_point, const int n_atom, const int n_point_per_grid, const int* d_i_atom_for_point,
+                                                       double* d_gradient_cache_x, double* d_gradient_cache_y, double* d_gradient_cache_z)
+    {
+        const int i_point = threadIdx.x + blockIdx.x * blockDim.x;
+        if (i_point >= n_point) return;
+        const int i_center_atom = d_i_atom_for_point[i_point];
 
-//         for(int j=0; j<numAtoms; ++j){
-//             x -= xGrad[ptIndex+j*grad_pitch];
-//             y -= yGrad[ptIndex+j*grad_pitch];
-//             z -= zGrad[ptIndex+j*grad_pitch];
-//         }
+        double gx = 0.0;
+        double gy = 0.0;
+        double gz = 0.0;
+        for (int i_atom = 0; i_atom < n_atom; i_atom++) {
+            gx -= d_gradient_cache_x[i_point + i_atom * n_point_per_grid];
+            gy -= d_gradient_cache_y[i_point + i_atom * n_point_per_grid];
+            gz -= d_gradient_cache_z[i_point + i_atom * n_point_per_grid];
+        }
 
-//         xGrad[ptIndex+ctr*grad_pitch] += x;
-//         yGrad[ptIndex+ctr*grad_pitch] += y;
-//         zGrad[ptIndex+ctr*grad_pitch] += z;
-//     }
+        d_gradient_cache_x[i_point + i_center_atom * n_point_per_grid] = gx;
+        d_gradient_cache_y[i_point + i_center_atom * n_point_per_grid] = gy;
+        d_gradient_cache_z[i_point + i_center_atom * n_point_per_grid] = gz;
+    }
 
-//     void Wgrad_ptctr_caller(const int GRID, const int BLOCK, const int numPoints, const int numAtoms, const int grad_pitch, const int* ctrs,
-//                             double* xGrad, double* yGrad, double* zGrad)
-//     {
-//         Wgrad_ptctr<<<GRID, BLOCK>>>(numPoints, numAtoms, grad_pitch, ctrs, xGrad, yGrad, zGrad);
-//     }
+    void weight_gradient_center_atom(const int n_grid, const int n_block, const int n_point, const int n_atom, const int n_point_per_grid, const int* d_i_atom_for_point,
+                                     double* d_gradient_cache_x, double* d_gradient_cache_y, double* d_gradient_cache_z)
+    {
+        weight_gradient_center_atom_kernel<<<n_grid, n_block>>>(n_point, n_atom, n_point_per_grid, d_i_atom_for_point, d_gradient_cache_x, d_gradient_cache_y, d_gradient_cache_z);
+    }
 
-//     __global__ void Wgrad_dosums(const int numPoints, double* final_grad,
-//                                 const double* xGrad, const double* yGrad, const double* zGrad)
-//     {
-//         __shared__ double scr[WGRAD_DOSUMS_BLOCK];
-//         int atom = blockIdx.x/3;
-//         int dimSelect = blockIdx.x%3;
-//         const double *end, *cur, *temp;
-//         double sum = 0.0;
-//         if( dimSelect == 0 )
-//             temp = xGrad;
-//         else if( dimSelect == 1 )
-//             temp = yGrad;
-//         else
-//             temp = zGrad;
-//         cur = temp + numPoints*atom + threadIdx.x;
-//         end = temp + numPoints * (atom+1);
+    // In this kernel, each block maps to (i_atom * 3 + i_xyz), and the whole block goes through all points and perform an internal summation.
+    __global__ void weight_gradient_sum_over_point_kernel(const int n_point, double* final_gradient,
+                                                          const double* d_gradient_cache_x, const double* d_gradient_cache_y, const double* d_gradient_cache_z)
+    {
+        __shared__ double shared_partial_output[weight_gradient_sum_over_point_dimension];
+        const int i_atom = blockIdx.x / 3;
+        const int xyz_dimension_select = blockIdx.x % 3;
+        const double* d_gradient_cache = (xyz_dimension_select == 0) ? d_gradient_cache_x : ( (xyz_dimension_select == 1) ? d_gradient_cache_y : d_gradient_cache_z );
 
-//         while(cur < end)
-//         {
-//             sum += *cur;
-//             cur += WGRAD_DOSUMS_BLOCK;
-//         }
-//         scr[threadIdx.x] = sum;
+        const double* cur = d_gradient_cache + n_point * i_atom + threadIdx.x;
+        const double* end = d_gradient_cache + n_point * (i_atom+1);
 
-//         for(int span=WGRAD_DOSUMS_BLOCK/2; span>1; span /= 2)
-//         {
-//             __syncthreads();
-//             if(threadIdx.x < span)
-//                 scr[threadIdx.x] += scr[threadIdx.x+span];
-//         }
+        double sum = 0.0;
+        while (cur < end) {
+            sum += *cur;
+            cur += weight_gradient_sum_over_point_dimension;
+        }
+        shared_partial_output[threadIdx.x] = sum;
 
-//         if( !threadIdx.x )
-//         {
-//             sum = scr[0]+scr[1];
-//             final_grad[blockIdx.x] = sum;
-//         }
-//     }
+        for (int span = weight_gradient_sum_over_point_dimension / 2; span > 1; span /= 2) {
+            __syncthreads();
+            if (threadIdx.x < span)
+                shared_partial_output[threadIdx.x] += shared_partial_output[threadIdx.x + span];
+        }
+        if (threadIdx.x == 0) {
+            sum = shared_partial_output[0] + shared_partial_output[1];
+            final_gradient[blockIdx.x] = sum;
+        }
+    }
 
-//     void Wgrad_dosums_caller(const int GRID, const int BLOCK, const int numPoints, double* final_grad,
-//                             const double* xGrad, const double* yGrad, const double* zGrad)
-//     {
-//         Wgrad_dosums<<<GRID, BLOCK>>>(numPoints, final_grad, xGrad, yGrad, zGrad);
-//     }
+    void weight_gradient_sum_over_point(const int n_grid, const int n_block, const int n_point, double* final_gradient,
+                                        const double* d_gradient_cache_x, const double* d_gradient_cache_y, const double* d_gradient_cache_z)
+    {
+        weight_gradient_sum_over_point_kernel<<<n_grid, n_block>>>(n_point, final_gradient, d_gradient_cache_x, d_gradient_cache_y, d_gradient_cache_z);
+    }
 
 }
