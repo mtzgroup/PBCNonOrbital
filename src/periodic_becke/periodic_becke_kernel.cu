@@ -300,20 +300,19 @@ namespace PeriodicBox
 
         // $$\sum_{B}^{N_{atom}} \sum_{\vec{P}_3 \in Z^3} \frac{\partial P^{PBC}(\vec{B} + \vec{P}_3, \vec{r}) }{\partial \vec{G}}$$
 
-        double dP_B_dG[3] { 0.0, 0.0, 0.0 };
+        double dP_B_dG_sum[3] { 0.0, 0.0, 0.0 };
         double P_B_sum = 0.0;
-        for (int i_atom_b = 0; i_atom_b < n_atom; i_atom_b++)
-        {
+        for (int i_atom_b = 0; i_atom_b < n_atom; i_atom_b++) {
             double atom_b[3] { d_atoms[i_atom_b].x, d_atoms[i_atom_b].y, d_atoms[i_atom_b].z };
             periodic_data.move_to_same_image(atom_a, atom_b);
 
             const double a_BG = d_interatomic_quantities[i_atom_b * n_atom + i_derivative_atom];
-            
+
             const double BG_without_offset[3] { atom_g[0] - atom_b[0], atom_g[1] - atom_b[1], atom_g[2] - atom_b[2] };
             int image3_positive_bound[3] { 0, 0, 0 };
             int image3_negative_bound[3] { 0, 0, 0 };
             periodic_data.get_cube_bound_real(image3_positive_bound, image3_negative_bound, BG_without_offset, image_cutoff_radius);
-            
+
             for (int i_image3_x = -image3_negative_bound[0]; i_image3_x <= image3_positive_bound[0]; i_image3_x++)
                 for (int i_image3_y = -image3_negative_bound[1]; i_image3_y <= image3_positive_bound[1]; i_image3_y++)
                     for (int i_image3_z = -image3_negative_bound[2]; i_image3_z <= image3_positive_bound[2]; i_image3_z++) {
@@ -323,6 +322,7 @@ namespace PeriodicBox
 
                         const double rB = get_r(atom_b_image[0], atom_b_image[1], atom_b_image[2], point[0], point[1], point[2]);
 
+                        double dP_B_dG[3] { 0.0, 0.0, 0.0 };
                         double P_B = 1.0;
                         for (int i_image2_x = -image3_negative_bound[0]; i_image2_x <= image3_positive_bound[0]; i_image2_x++)
                             for (int i_image2_y = -image3_negative_bound[1]; i_image2_y <= image3_positive_bound[1]; i_image2_y++)
@@ -337,11 +337,9 @@ namespace PeriodicBox
                                     const double nu = mu + a_BG * (1.0 - mu * mu);
                                     P_B *= switch_function(nu);
                                     if (P_B < switch_function_threshold) {
-                                        P_B = 0.0;
-                                        dP_B_dG[0] = 0.0; dP_B_dG[1] = 0.0; dP_B_dG[2] = 0.0;
                                         goto jump_out_g_image_loop;
                                     }
-                                    
+
                                     const double dsdmu_over_s = switch_function_dsdmu_over_s(mu, a_BG);
                                     const double3 dmudG = smooth_function_dmudB(atom_a, atom_g_image, point, a_AG, i_atom_b == i_derivative_atom);
 
@@ -353,6 +351,9 @@ namespace PeriodicBox
                         dP_B_dG[0] *= P_B;
                         dP_B_dG[1] *= P_B;
                         dP_B_dG[2] *= P_B;
+                        dP_B_dG_sum[0] += dP_B_dG[0];
+                        dP_B_dG_sum[1] += dP_B_dG[1];
+                        dP_B_dG_sum[2] += dP_B_dG[2];
                         P_B_sum += P_B;
 
                         jump_out_g_image_loop: ;
@@ -362,12 +363,12 @@ namespace PeriodicBox
         // Combine the two pieces
 
         const double point_weight = d_point_w[i_point];
-        d_gradient_cache_x[i_point + i_derivative_atom * n_point_per_grid] += point_weight / P_B_sum * (dP_A_dG[0] + P_A / P_B_sum * dP_B_dG[0]);
-        d_gradient_cache_y[i_point + i_derivative_atom * n_point_per_grid] += point_weight / P_B_sum * (dP_A_dG[1] + P_A / P_B_sum * dP_B_dG[1]);
-        d_gradient_cache_z[i_point + i_derivative_atom * n_point_per_grid] += point_weight / P_B_sum * (dP_A_dG[2] + P_A / P_B_sum * dP_B_dG[2]);
+        d_gradient_cache_x[i_point + i_derivative_atom * n_point_per_grid] += point_weight / P_B_sum * (dP_A_dG[0] + P_A / P_B_sum * dP_B_dG_sum[0]);
+        d_gradient_cache_y[i_point + i_derivative_atom * n_point_per_grid] += point_weight / P_B_sum * (dP_A_dG[1] + P_A / P_B_sum * dP_B_dG_sum[1]);
+        d_gradient_cache_z[i_point + i_derivative_atom * n_point_per_grid] += point_weight / P_B_sum * (dP_A_dG[2] + P_A / P_B_sum * dP_B_dG_sum[2]);
     }
 
-    void weight_gradient_compute(const dim3 n_grid, const dim3 n_block, const int n_point, const int n_atom, const int n_point_per_grid, 
+    void weight_gradient_compute(const dim3 n_grid, const dim3 n_block, const int n_point, const int n_atom, const int n_point_per_grid,
                                  const double* d_point_x, const double* d_point_y, const double* d_point_z, const double* d_point_w,
                                  const float4* d_atoms, const int* d_i_atom_for_point,
                                  double* d_gradient_cache_x, double* d_gradient_cache_y, double* d_gradient_cache_z,

@@ -76,7 +76,7 @@ namespace PeriodicBox
         remaining_gpu_memory_bytes -= sizeof(double) * n_atom * n_atom;  // d_interatomic_quantities
         remaining_gpu_memory_bytes -= n_point_job * (4 * sizeof(double) + sizeof(int)); // d_point_xyzw and d_i_atom_for_point
 
-        const int n_bytes_per_point = 4 * n_atom * sizeof(double); // d_gradient_cache_xyzp
+        const int n_bytes_per_point = 4 * n_atom * sizeof(double); // d_gradient_cache_xyz
         const int max_points_for_job = remaining_gpu_memory_bytes / n_bytes_per_point;
         int n_point_per_grid;
         if (n_point_job < max_points_for_job)
@@ -85,11 +85,10 @@ namespace PeriodicBox
             n_point_per_grid = (max_points_for_job / weight_gradient_block_x_dimension) * weight_gradient_block_x_dimension;
         n_point_per_grid = min(n_point_per_grid, weight_gradient_max_grid_dimension * weight_gradient_block_x_dimension);
 
-        double* d_gradient_cache_xyzp = (double*)gpu->gpuAlloc(sizeof(double) * n_point_per_grid * n_atom * 4);
-        double* d_gradient_cache_x = d_gradient_cache_xyzp + n_point_per_grid * n_atom * 0;
-        double* d_gradient_cache_y = d_gradient_cache_xyzp + n_point_per_grid * n_atom * 1;
-        double* d_gradient_cache_z = d_gradient_cache_xyzp + n_point_per_grid * n_atom * 2;
-        double* d_p_sum_cache          = d_gradient_cache_xyzp + n_point_per_grid * n_atom * 3;
+        double* d_gradient_cache_xyz = (double*)gpu->gpuAlloc(sizeof(double) * n_point_per_grid * n_atom * 3);
+        double* d_gradient_cache_x = d_gradient_cache_xyz + n_point_per_grid * n_atom * 0;
+        double* d_gradient_cache_y = d_gradient_cache_xyz + n_point_per_grid * n_atom * 1;
+        double* d_gradient_cache_z = d_gradient_cache_xyz + n_point_per_grid * n_atom * 2;
         cudaMemset(d_gradient_cache_x, 0, sizeof(double) * n_point_per_grid * n_atom); CUERR;
         cudaMemset(d_gradient_cache_y, 0, sizeof(double) * n_point_per_grid * n_atom); CUERR;
         cudaMemset(d_gradient_cache_z, 0, sizeof(double) * n_point_per_grid * n_atom); CUERR;
@@ -130,7 +129,7 @@ namespace PeriodicBox
 
         gpu->gpuFree(d_gradient);
         gpu->cpuFree(h_gradient);
-        gpu->gpuFree(d_gradient_cache_xyzp);
+        gpu->gpuFree(d_gradient_cache_xyz);
         gpu->gpuFree(d_i_atom_for_point);
         gpu->gpuFree(d_point_xyzw);
         gpu->cpuFree(h_i_atom_for_point);
