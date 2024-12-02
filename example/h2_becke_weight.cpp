@@ -59,8 +59,10 @@ int main()
     grid_points[3].w_fixed = 1.0; grid_points[3].w_total = NAN; grid_points[3].i_atom = 1;
 
     const double epsilon_xc[n_grid_point] {
-        10.0,
-        10.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
     };
 
     double* analytical_gradient = new double[n_atom * 3];
