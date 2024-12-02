@@ -4,6 +4,8 @@
 
 #include "../gpubox.h"
 
+#define DIVIDE_BY_ZERO_PROTECTION_THRESHOLD 1.0e-14
+
 namespace PeriodicBox
 {
     static __device__ double get_r(double x1, double y1, double z1, double x2, double y2, double z2)
@@ -13,7 +15,8 @@ namespace PeriodicBox
 
     static __device__ double get_one_over_r(double x1, double y1, double z1, double x2, double y2, double z2)
     {
-        return rsqrt((x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1) + (z2 - z1) * (z2 - z1));
+        const double r = get_r(x1, y1, z1, x2, y2, z2);
+        return (r > DIVIDE_BY_ZERO_PROTECTION_THRESHOLD) ? (1.0 / r) : 0.0;
     }
 
     // This is the form proposed by Becke in the original Becke weight equation
@@ -46,7 +49,7 @@ namespace PeriodicBox
             double atom_1[3] = { d_atoms[i_atom_1].x, d_atoms[i_atom_1].y, d_atoms[i_atom_1].z };
             periodic_data.move_to_same_image(reference_image, atom_1);
 
-            const double atom1_to_reference[3] { atom_1[0] - reference_image[0], atom_1[1] - reference_image[1], atom_1[2] - reference_image[2], };
+            const double atom1_to_reference[3] { atom_1[0] - reference_image[0], atom_1[1] - reference_image[1], atom_1[2] - reference_image[2] };
             int image1_positive_bound[3] { 0, 0, 0 };
             int image1_negative_bound[3] { 0, 0, 0 };
             periodic_data.get_cube_bound_real(image1_positive_bound, image1_negative_bound, atom1_to_reference, image_cutoff_radius);
@@ -66,7 +69,7 @@ namespace PeriodicBox
                             double atom_2[3] = { d_atoms[i_atom_2].x, d_atoms[i_atom_2].y, d_atoms[i_atom_2].z };
                             periodic_data.move_to_same_image(reference_image, atom_2);
 
-                            const double atom2_to_reference[3] { atom_2[0] - reference_image[0], atom_2[1] - reference_image[1], atom_2[2] - reference_image[2], };
+                            const double atom2_to_reference[3] { atom_2[0] - reference_image[0], atom_2[1] - reference_image[1], atom_2[2] - reference_image[2] };
                             int image2_positive_bound[3] { 0, 0, 0 };
                             int image2_negative_bound[3] { 0, 0, 0 };
                             periodic_data.get_cube_bound_real(image2_positive_bound, image2_negative_bound, atom2_to_reference, image_cutoff_radius);
@@ -174,100 +177,46 @@ namespace PeriodicBox
 
     // For gradient
 
-    __global__ void weight_gradient_cache_kernel(const int n_point, const int n_atom, const int n_point_per_grid,
-                                                 const double* d_point_x, const double* d_point_y, const double* d_point_z, const float4* d_atoms,
-                                                 double* d_p_cache,
-                                                 const double* d_interatomic_quantities, const double switch_function_threshold,
-                                                 const double image_cutoff_radius, const PeriodicKernelDataReal<double> periodic_data)
+    __device__ double3 smooth_function_dmudA(const double A[3], const double B[3], const double point[3], const double a_ab, const bool A_equal_B)
     {
-        const int i_point = threadIdx.x + blockIdx.x * blockDim.x;
-        if (i_point >= n_point) return;
-
-        const int i_atom_a = threadIdx.y + blockIdx.y * blockDim.y;
-        if (i_atom_a >= n_atom) return;
-
-        const double point[3] { d_point_x[i_point], d_point_y[i_point], d_point_z[i_point]};
-        const double atom_a[3] { d_atoms[i_atom_a].x, d_atoms[i_atom_a].y, d_atoms[i_atom_a].z };
-        const double ra = get_r(atom_a[0], atom_a[1], atom_a[2], point[0], point[1], point[2]);
-
-        double p_a = 1.0;
-
-        for (int i_atom_b = 0; i_atom_b < n_atom; i_atom_b++) {
-            const double a_ab = d_interatomic_quantities[i_atom_a * n_atom + i_atom_b];
-
-            double atom_b[3] = { d_atoms[i_atom_b].x, d_atoms[i_atom_b].y, d_atoms[i_atom_b].z };
-            periodic_data.move_to_same_image(atom_a, atom_b);
-
-            const double r_ab[3] { atom_b[0] - atom_a[0], atom_b[1] - atom_a[1], atom_b[2] - atom_a[2], };
-            int image2_positive_bound[3] { 0, 0, 0 };
-            int image2_negative_bound[3] { 0, 0, 0 };
-            periodic_data.get_cube_bound_real(image2_positive_bound, image2_negative_bound, r_ab, image_cutoff_radius);
-
-            for (int i_image2_x = -image2_negative_bound[0]; i_image2_x <= image2_positive_bound[0]; i_image2_x++)
-                for (int i_image2_y = -image2_negative_bound[1]; i_image2_y <= image2_positive_bound[1]; i_image2_y++)
-                    for (int i_image2_z = -image2_negative_bound[2]; i_image2_z <= image2_positive_bound[2]; i_image2_z++) {
-                        double lattice_image_b[3];
-                        periodic_data.get_absolute_coord_real(lattice_image_b, i_image2_x, i_image2_y, i_image2_z);
-                        const double atom_b_image[3] = { atom_b[0] + lattice_image_b[0], atom_b[1] + lattice_image_b[1], atom_b[2] + lattice_image_b[2] };
-
-                        if ( (i_atom_a != i_atom_b) ||
-                             !(i_image2_x == 0 && i_image2_y == 0 && i_image2_z == 0) ) {
-                            const double one_over_rab = get_one_over_r(atom_a[0], atom_a[1], atom_a[2], atom_b_image[0], atom_b_image[1], atom_b_image[2]);
-                            const double rb = get_r(atom_b_image[0], atom_b_image[1], atom_b_image[2], point[0], point[1], point[2]);
-                            const double mu = (ra - rb) * one_over_rab;
-                            // Refer to energy section for the details of this equation
-                            const double nu = mu + a_ab * (1.0 - mu * mu);
-                            p_a *= switch_function(nu);
-                            if (p_a < switch_function_threshold) {
-                                p_a = 0.0;
-                                goto jump_out_atom2_image_loop;
-                            }
-                        }
-                    }
+        const double Ar[3] { A[0] - point[0], A[1] - point[1], A[2] - point[2] };
+        const double Br[3] { B[0] - point[0], B[1] - point[1], B[2] - point[2] };
+        const double AB[3] { A[0] - B[0], A[1] - B[1], A[2] - B[2] };
+        if (!A_equal_B) {
+            const double norm_Ar = sqrt(Ar[0] * Ar[0] + Ar[1] * Ar[1] + Ar[2] * Ar[2]);
+            const double norm_Br = sqrt(Br[0] * Br[0] + Br[1] * Br[1] + Br[2] * Br[2]);
+            const double one_over_Ar = (norm_Ar > DIVIDE_BY_ZERO_PROTECTION_THRESHOLD) ? (1.0 / norm_Ar) : 0.0;
+            const double one_over_AB = get_one_over_r(A[0], A[1], A[2], B[0], B[1], B[2]);
+            const double mu = (norm_Ar - norm_Br) * one_over_AB;
+            const double normalized_Ar[3] = { (A[0] - point[0]) * one_over_Ar, (A[1] - point[1]) * one_over_Ar, (A[2] - point[2]) * one_over_Ar };
+            const double normalized_AB[3] = { (A[0] - B[0]) * one_over_AB, (A[1] - B[1]) * one_over_AB, (A[2] - B[2]) * one_over_AB };
+            double3 gradient;
+            gradient.x = one_over_AB * (normalized_Ar[0] - mu * normalized_AB[0]);
+            gradient.y = one_over_AB * (normalized_Ar[1] - mu * normalized_AB[1]);
+            gradient.z = one_over_AB * (normalized_Ar[2] - mu * normalized_AB[2]);
+            return gradient;
+        } else {
+            const double one_over_Ar = get_one_over_r(A[0], A[1], A[2], point[0], point[1], point[2]);
+            const double one_over_Br = get_one_over_r(B[0], B[1], B[2], point[0], point[1], point[2]);
+            const double one_over_AB = get_one_over_r(A[0], A[1], A[2], B[0], B[1], B[2]);
+            const double normalized_Ar[3] = { (A[0] - point[0]) * one_over_Ar, (A[1] - point[1]) * one_over_Ar, (A[2] - point[2]) * one_over_Ar };
+            const double normalized_Br[3] = { (B[0] - point[0]) * one_over_Br, (B[1] - point[1]) * one_over_Br, (B[2] - point[2]) * one_over_Br };
+            double3 gradient;
+            gradient.x = one_over_AB * (normalized_Ar[0] - normalized_Br[0]);
+            gradient.y = one_over_AB * (normalized_Ar[1] - normalized_Br[1]);
+            gradient.z = one_over_AB * (normalized_Ar[2] - normalized_Br[2]);
+            return gradient;
         }
-        jump_out_atom2_image_loop:
-        d_p_cache[i_point + n_point_per_grid * i_atom_a] = p_a;
     }
 
-    void weight_gradient_cache(const dim3 n_grid, const dim3 n_block, const int n_point, const int n_atom, const int n_point_per_grid,
-                               const double* d_point_x, const double* d_point_y, const double* d_point_z, const float4* d_atoms,
-                               double* d_p_cache,
-                               const double* d_interatomic_quantities, const double switch_function_threshold,
-                               const double image_cutoff_radius, const LatticeVector unit_cell)
+    __device__ double3 smooth_function_dmudB(const double A[3], const double B[3], const double point[3], const double a_ab, const bool A_equal_B)
     {
-        const PeriodicKernelDataReal<double> periodic_data(NAN, NAN, NAN, unit_cell);
-        weight_gradient_cache_kernel<<<n_grid, n_block>>>(n_point, n_atom, n_point_per_grid, d_point_x, d_point_y, d_point_z, d_atoms,
-                                                          d_p_cache, d_interatomic_quantities, switch_function_threshold,
-                                                          image_cutoff_radius, periodic_data);
+        const double3 dmudA = smooth_function_dmudA(A, B, point, a_ab, A_equal_B);
+        double3 dmudB; dmudB.x = -dmudA.x; dmudB.y = -dmudA.y; dmudB.z = -dmudA.z;
+        return dmudB;
     }
 
-//     __device__ double3 Dev_grad_nu(int g, double3 rg_vec, double rg, int b, double rb, double d_gb, double a_gb, const float4* d_atoms)
-//     {
-//         double3 grad;
-
-//         double3 r_gb;
-//         r_gb.x = d_atoms[g].x - d_atoms[b].x;
-//         r_gb.y = d_atoms[g].y - d_atoms[b].y;
-//         r_gb.z = d_atoms[g].z - d_atoms[b].z;
-
-//         double mu = (rg - rb)*d_gb;
-//         double coef = 1.0-2.0*a_gb*mu;
-//         double r_g_coef;
-
-//         if (rg < 1.0e-14)     r_g_coef = 0.0;
-//         else                  r_g_coef = -coef*d_gb/rg;
-//         grad.x = r_g_coef * rg_vec.x;
-//         grad.y = r_g_coef * rg_vec.y;
-//         grad.z = r_g_coef * rg_vec.z;
-
-//         double r_gb_coef = -coef*mu*d_gb*d_gb;
-//         grad.x += r_gb_coef * r_gb.x;
-//         grad.y += r_gb_coef * r_gb.y;
-//         grad.z += r_gb_coef * r_gb.z;
-//         return grad;
-//     }
-
-    static __device__ double switch_function_derivative_over_value(const double m)
+    static __device__ double switch_function_dsdx_over_s(const double m)
     {
         const double f1 = 1.5 *  m - 0.5 * m*m*m;
         const double f2 = 1.5 * f1 - 0.5 * f1*f1*f1;
@@ -278,111 +227,156 @@ namespace PeriodicBox
         else
             return -(27.0/16.0) * (1.0 - f2*f2) * (1.0 - f1*f1) * (1.0 - m*m) / s;
     }
-//     __device__ double Dev_comp_t(double mu_ij, double a_ij)
-//     {
-//         double t;
-//         double nu = mu_ij + a_ij*(1.0-mu_ij*mu_ij);
-//         double p1 = 1.5*nu - 0.5*nu*nu*nu;
-//         double p2 = 1.5*p1 - 0.5*p1*p1*p1;
-//         double s_val;
-//         double p3 = 1.5*p2 - 0.5*p2*p2*p2;
-//         s_val = 0.5 * (1.0 - p3);
-//         if (fabs(s_val) < 1.0e-14)
-//             return 0.0;
-//         t = -(27.0/16.0) * (1.0 - p2*p2) * (1.0 - p1*p1) * (1.0 - nu*nu) / s_val;
-//         return t;
-//     }
+
+    static __device__ double switch_function_dsdmu_over_s(const double mu, const double a_ab)
+    {
+        const double nu = mu + a_ab * (1.0 - mu * mu);
+        const double dnudmu = 1.0 - 2.0 * a_ab * mu;
+        return switch_function_dsdx_over_s(nu) * dnudmu;
+    }
 
     __global__ void weight_gradient_compute_kernel(const int n_point, const int n_atom, const int n_point_per_grid,
                                                    const double* d_point_x, const double* d_point_y, const double* d_point_z, const double* d_point_w,
                                                    const float4* d_atoms, const int* d_i_atom_for_point,
                                                    double* d_gradient_cache_x, double* d_gradient_cache_y, double* d_gradient_cache_z,
-                                                   const double* d_p_cache, const double* d_interatomic_quantities,
+                                                   const double* d_interatomic_quantities, const double switch_function_threshold,
                                                    const double image_cutoff_radius, const PeriodicKernelDataReal<double> periodic_data)
     {
         const int i_point = threadIdx.x + blockIdx.x * blockDim.x;
         if (i_point >= n_point) return;
-        const int i_center_atom = d_i_atom_for_point[i_point];
+        const int i_center_atom = d_i_atom_for_point[i_point]; // Called A
 
-        const int i_derivative_atom = threadIdx.y + blockIdx.y * blockDim.y;
+        const int i_derivative_atom = threadIdx.y + blockIdx.y * blockDim.y; // Called G
         if (i_derivative_atom == i_center_atom) return;
         if (i_derivative_atom >= n_atom) return;
-        const double p_a = d_p_cache[i_point + i_center_atom     * n_point_per_grid];
-        const double p_g = d_p_cache[i_point + i_derivative_atom * n_point_per_grid];
 
         const double point[3] { d_point_x[i_point], d_point_y[i_point], d_point_z[i_point]};
+        const double atom_a[3] { d_atoms[i_center_atom].x, d_atoms[i_center_atom].y, d_atoms[i_center_atom].z };
+        double atom_g[3] { d_atoms[i_derivative_atom].x, d_atoms[i_derivative_atom].y, d_atoms[i_derivative_atom].z };
+        periodic_data.move_to_same_image(atom_a, atom_g);
 
-//         double3 grad_c_w_a;    grad_c_w_a.x = grad_c_w_a.y = grad_c_w_a.z = 0.0f;
-//         double3 grad_c_p_a;    grad_c_p_a.x = grad_c_p_a.y = grad_c_p_a.z = 0.0f;
-//         double3 grad_c_p_g;    grad_c_p_g.x = grad_c_p_g.y = grad_c_p_g.z = 0.0f;
-//         float4 tAtom = d_atoms[i_derivative_atom];
-//         double3 rg_vec;
-//         rg_vec.x = point[0] - tAtom.x;
-//         rg_vec.y = point[1] - tAtom.y;
-//         rg_vec.z = point[2] - tAtom.z;
-//         double rg = sqrt(rg_vec.x*rg_vec.x + rg_vec.y*rg_vec.y + rg_vec.z*rg_vec.z);
+        // $$\frac{\partial P^{PBC}(\vec{A}, \vec{r})}{\partial \vec{G}}$$
 
-//         double p_sum = 0.0;
+        const double rA = get_r(atom_a[0], atom_a[1], atom_a[2], point[0], point[1], point[2]);
+        const double a_AG = d_interatomic_quantities[i_center_atom * n_atom + i_derivative_atom];
 
+        const double AG_without_offset[3] { atom_g[0] - atom_a[0], atom_g[1] - atom_a[1], atom_g[2] - atom_a[2] };
+        int image1_positive_bound[3] { 0, 0, 0 };
+        int image1_negative_bound[3] { 0, 0, 0 };
+        periodic_data.get_cube_bound_real(image1_positive_bound, image1_negative_bound, AG_without_offset, image_cutoff_radius);
+
+        double dP_A_dG[3] { 0.0, 0.0, 0.0 };
+        double P_A = 1.0;
+        for (int i_image1_x = -image1_negative_bound[0]; i_image1_x <= image1_positive_bound[0]; i_image1_x++)
+            for (int i_image1_y = -image1_negative_bound[1]; i_image1_y <= image1_positive_bound[1]; i_image1_y++)
+                for (int i_image1_z = -image1_negative_bound[2]; i_image1_z <= image1_positive_bound[2]; i_image1_z++) {
+                    double lattice_image_g[3];
+                    periodic_data.get_absolute_coord_real(lattice_image_g, i_image1_x, i_image1_y, i_image1_z);
+                    const double atom_g_image[3] = { atom_g[0] + lattice_image_g[0], atom_g[1] + lattice_image_g[1], atom_g[2] + lattice_image_g[2] };
+
+                    const double one_over_AG = get_one_over_r(atom_a[0], atom_a[1], atom_a[2], atom_g_image[0], atom_g_image[1], atom_g_image[2]);
+                    const double rG = get_r(atom_g_image[0], atom_g_image[1], atom_g_image[2], point[0], point[1], point[2]);
+                    const double mu = (rA - rG) * one_over_AG;
+                    const double nu = mu + a_AG * (1.0 - mu * mu);
+                    P_A *= switch_function(nu);
+                    if (P_A < switch_function_threshold) {
+                        d_gradient_cache_x[i_point + i_derivative_atom * n_point_per_grid] = 0.0;
+                        d_gradient_cache_y[i_point + i_derivative_atom * n_point_per_grid] = 0.0;
+                        d_gradient_cache_z[i_point + i_derivative_atom * n_point_per_grid] = 0.0;
+                        return;
+                    }
+
+                    const double dsdmu_over_s = switch_function_dsdmu_over_s(mu, a_AG);
+                    const double3 dmudG = smooth_function_dmudB(atom_a, atom_g_image, point, a_AG, false);
+
+                    dP_A_dG[0] += dsdmu_over_s * dmudG.x;
+                    dP_A_dG[1] += dsdmu_over_s * dmudG.y;
+                    dP_A_dG[2] += dsdmu_over_s * dmudG.z;
+                }
+
+        dP_A_dG[0] *= P_A;
+        dP_A_dG[1] *= P_A;
+        dP_A_dG[2] *= P_A;
+
+        // $$\sum_{B}^{N_{atom}} \sum_{\vec{P}_3 \in Z^3} \frac{\partial P^{PBC}(\vec{B} + \vec{P}_3, \vec{r}) }{\partial \vec{G}}$$
+
+        double dP_B_dG[3] { 0.0, 0.0, 0.0 };
+        double P_B_sum = 0.0;
         for (int i_atom_b = 0; i_atom_b < n_atom; i_atom_b++)
         {
-            const double p_b = d_p_cache[i_point + i_atom_b * n_point_per_grid];
-//             p_sum += p_b;
-//             if ( (p_b == 0.0f && p_g == 0.0f) || (i_derivative_atom == i_atom_b) )
-//                 continue;
+            double atom_b[3] { d_atoms[i_atom_b].x, d_atoms[i_atom_b].y, d_atoms[i_atom_b].z };
+            periodic_data.move_to_same_image(atom_a, atom_b);
 
-//             double rb = ra_cache[i_point + i_atom_b * n_point_per_grid];
-//             double a_ab = d_interatomic_quantities[i_atom_b * n_atom + i_derivative_atom];
-//             double mu_gb = (rg - rb) * one_over_rab;
-//             double3 grad_nu = Dev_grad_nu(i_derivative_atom, rg_vec, rg, i_atom_b, rb, one_over_rab, -a_ab, d_atoms);
+            const double a_BG = d_interatomic_quantities[i_atom_b * n_atom + i_derivative_atom];
+            
+            const double BG_without_offset[3] { atom_g[0] - atom_b[0], atom_g[1] - atom_b[1], atom_g[2] - atom_b[2] };
+            int image3_positive_bound[3] { 0, 0, 0 };
+            int image3_negative_bound[3] { 0, 0, 0 };
+            periodic_data.get_cube_bound_real(image3_positive_bound, image3_negative_bound, BG_without_offset, image_cutoff_radius);
+            
+            for (int i_image3_x = -image3_negative_bound[0]; i_image3_x <= image3_positive_bound[0]; i_image3_x++)
+                for (int i_image3_y = -image3_negative_bound[1]; i_image3_y <= image3_positive_bound[1]; i_image3_y++)
+                    for (int i_image3_z = -image3_negative_bound[2]; i_image3_z <= image3_positive_bound[2]; i_image3_z++) {
+                        double lattice_image_b[3];
+                        periodic_data.get_absolute_coord_real(lattice_image_b, i_image3_x, i_image3_y, i_image3_z);
+                        const double atom_b_image[3] = { atom_b[0] + lattice_image_b[0], atom_b[1] + lattice_image_b[1], atom_b[2] + lattice_image_b[2] };
 
-//             double t;
-//             if( p_g != 0.0f )
-//             {
-//                 t = Dev_comp_t(mu_gb, -a_ab);
-//                 grad_c_p_g.x += t*grad_nu.x;
-//                 grad_c_p_g.y += t*grad_nu.y;
-//                 grad_c_p_g.z += t*grad_nu.z;
-//             }
+                        const double rB = get_r(atom_b_image[0], atom_b_image[1], atom_b_image[2], point[0], point[1], point[2]);
 
-//             double3 grad_c_p_b;
-//             if(p_b != 0.0f)
-//             {
-//                 t = -Dev_comp_t(-mu_gb, a_ab)*p_b;
-//                 grad_c_p_b.x = t * grad_nu.x;
-//                 grad_c_p_b.y = t * grad_nu.y;
-//                 grad_c_p_b.z = t * grad_nu.z;
+                        double P_B = 1.0;
+                        for (int i_image2_x = -image3_negative_bound[0]; i_image2_x <= image3_positive_bound[0]; i_image2_x++)
+                            for (int i_image2_y = -image3_negative_bound[1]; i_image2_y <= image3_positive_bound[1]; i_image2_y++)
+                                for (int i_image2_z = -image3_negative_bound[2]; i_image2_z <= image3_positive_bound[2]; i_image2_z++) {
+                                    double lattice_image_g[3];
+                                    periodic_data.get_absolute_coord_real(lattice_image_g, i_image2_x, i_image2_y, i_image2_z);
+                                    const double atom_g_image[3] = { atom_g[0] + lattice_image_g[0], atom_g[1] + lattice_image_g[1], atom_g[2] + lattice_image_g[2] };
 
-//                 if(i_atom_b == i_center_atom)
-//                     grad_c_p_a = grad_c_p_b;
+                                    const double one_over_BG = get_one_over_r(atom_b_image[0], atom_b_image[1], atom_b_image[2], atom_g_image[0], atom_g_image[1], atom_g_image[2]);
+                                    const double rG = get_r(atom_g_image[0], atom_g_image[1], atom_g_image[2], point[0], point[1], point[2]);
+                                    const double mu = (rB - rG) * one_over_BG;
+                                    const double nu = mu + a_BG * (1.0 - mu * mu);
+                                    P_B *= switch_function(nu);
+                                    if (P_B < switch_function_threshold) {
+                                        P_B = 0.0;
+                                        dP_B_dG[0] = 0.0; dP_B_dG[1] = 0.0; dP_B_dG[2] = 0.0;
+                                        goto jump_out_g_image_loop;
+                                    }
+                                    
+                                    const double dsdmu_over_s = switch_function_dsdmu_over_s(mu, a_BG);
+                                    const double3 dmudG = smooth_function_dmudB(atom_a, atom_g_image, point, a_AG, i_atom_b == i_derivative_atom);
 
-//                 grad_c_w_a.x -= grad_c_p_b.x;
-//                 grad_c_w_a.y -= grad_c_p_b.y;
-//                 grad_c_w_a.z -= grad_c_p_b.z;
-//             }
+                                    dP_B_dG[0] += dsdmu_over_s * dmudG.x;
+                                    dP_B_dG[1] += dsdmu_over_s * dmudG.y;
+                                    dP_B_dG[2] += dsdmu_over_s * dmudG.z;
+                                }
+
+                        dP_B_dG[0] *= P_B;
+                        dP_B_dG[1] *= P_B;
+                        dP_B_dG[2] *= P_B;
+                        P_B_sum += P_B;
+
+                        jump_out_g_image_loop: ;
+                    }
         }
-//         grad_c_w_a.x -= grad_c_p_g.x*p_g;
-//         grad_c_w_a.y -= grad_c_p_g.y*p_g;
-//         grad_c_w_a.z -= grad_c_p_g.z*p_g;
+
+        // Combine the two pieces
 
         const double point_weight = d_point_w[i_point];
-//         double coef1 = p_a / p_sum;
-//         double coef2 = point_weight / p_sum;
-//         d_gradient_cache_x[i_point + i_derivative_atom * n_point_per_grid] += coef2 * (coef1 * grad_c_w_a.x + grad_c_p_a.x);
-//         d_gradient_cache_y[i_point + i_derivative_atom * n_point_per_grid] += coef2 * (coef1 * grad_c_w_a.y + grad_c_p_a.y);
-//         d_gradient_cache_z[i_point + i_derivative_atom * n_point_per_grid] += coef2 * (coef1 * grad_c_w_a.z + grad_c_p_a.z);
+        d_gradient_cache_x[i_point + i_derivative_atom * n_point_per_grid] += point_weight / P_B_sum * (dP_A_dG[0] + P_A / P_B_sum * dP_B_dG[0]);
+        d_gradient_cache_y[i_point + i_derivative_atom * n_point_per_grid] += point_weight / P_B_sum * (dP_A_dG[1] + P_A / P_B_sum * dP_B_dG[1]);
+        d_gradient_cache_z[i_point + i_derivative_atom * n_point_per_grid] += point_weight / P_B_sum * (dP_A_dG[2] + P_A / P_B_sum * dP_B_dG[2]);
     }
 
     void weight_gradient_compute(const dim3 n_grid, const dim3 n_block, const int n_point, const int n_atom, const int n_point_per_grid, 
                                  const double* d_point_x, const double* d_point_y, const double* d_point_z, const double* d_point_w,
                                  const float4* d_atoms, const int* d_i_atom_for_point,
                                  double* d_gradient_cache_x, double* d_gradient_cache_y, double* d_gradient_cache_z,
-                                 const double* d_p_cache, const double* d_interatomic_quantities,
+                                 const double* d_interatomic_quantities, const double switch_function_threshold,
                                  const double image_cutoff_radius, const LatticeVector unit_cell)
     {
         const PeriodicKernelDataReal<double> periodic_data(NAN, NAN, NAN, unit_cell);
         weight_gradient_compute_kernel<<<n_grid, n_block>>>(n_point, n_atom, n_point_per_grid, d_point_x, d_point_y, d_point_z, d_point_w, d_atoms, d_i_atom_for_point,
-                                                            d_gradient_cache_x, d_gradient_cache_y, d_gradient_cache_z, d_p_cache, d_interatomic_quantities, image_cutoff_radius, periodic_data);
+                                                            d_gradient_cache_x, d_gradient_cache_y, d_gradient_cache_z, d_interatomic_quantities, switch_function_threshold, image_cutoff_radius, periodic_data);
     }
 
     __global__ void weight_gradient_center_atom_kernel(const int n_point, const int n_atom, const int n_point_per_grid, const int* d_i_atom_for_point,

@@ -89,7 +89,7 @@ namespace PeriodicBox
         double* d_gradient_cache_x = d_gradient_cache_xyzp + n_point_per_grid * n_atom * 0;
         double* d_gradient_cache_y = d_gradient_cache_xyzp + n_point_per_grid * n_atom * 1;
         double* d_gradient_cache_z = d_gradient_cache_xyzp + n_point_per_grid * n_atom * 2;
-        double* d_p_cache          = d_gradient_cache_xyzp + n_point_per_grid * n_atom * 3;
+        double* d_p_sum_cache          = d_gradient_cache_xyzp + n_point_per_grid * n_atom * 3;
         cudaMemset(d_gradient_cache_x, 0, sizeof(double) * n_point_per_grid * n_atom); CUERR;
         cudaMemset(d_gradient_cache_y, 0, sizeof(double) * n_point_per_grid * n_atom); CUERR;
         cudaMemset(d_gradient_cache_z, 0, sizeof(double) * n_point_per_grid * n_atom); CUERR;
@@ -106,15 +106,10 @@ namespace PeriodicBox
             if (n_point_this_grid % weight_gradient_block_x_dimension != 0)
                 grid_dim.x++;
 
-            cudaDeviceSynchronize(); CUERR;
-            weight_gradient_cache(grid_dim, block_dim, n_point_this_grid, n_atom, n_point_per_grid,
-                                  d_point_x + i_grid, d_point_y + i_grid, d_point_z + i_grid, d_atoms,
-                                  d_p_cache, d_interatomic_quantities, default_switch_function_threshold, default_image_cutoff_radius, unit_cell); CUERR;
-
             weight_gradient_compute(grid_dim, block_dim, n_point_this_grid, n_atom, n_point_per_grid,
                                     d_point_x + i_grid, d_point_y + i_grid, d_point_z + i_grid, d_point_w + i_grid, d_atoms,
                                     d_i_atom_for_point + i_grid, d_gradient_cache_x, d_gradient_cache_y, d_gradient_cache_z,
-                                    d_p_cache, d_interatomic_quantities, default_image_cutoff_radius, unit_cell); CUERR;
+                                    d_interatomic_quantities, default_switch_function_threshold, default_image_cutoff_radius, unit_cell); CUERR;
 
             // Center atom gradient
             int center_atom_kernel_grid_dim = n_point_this_grid / weight_gradient_center_atom_block_dimension;

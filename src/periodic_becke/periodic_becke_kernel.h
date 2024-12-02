@@ -29,16 +29,11 @@ namespace PeriodicBox
     const int weight_gradient_center_atom_block_dimension = 256;
     const int weight_gradient_sum_over_point_dimension = 256;
 
-    void weight_gradient_cache(const dim3 n_grid, const dim3 n_block, const int n_point, const int n_atom, const int n_point_per_grid,
-                               const double* d_point_x, const double* d_point_y, const double* d_point_z, const float4* d_atoms,
-                               double* d_p_cache,
-                               const double* d_interatomic_quantities, const double switch_function_threshold,
-                               const double image_cutoff_radius, const LatticeVector unit_cell);
     void weight_gradient_compute(const dim3 n_grid, const dim3 n_block, const int n_point, const int n_atom, const int n_point_per_grid, 
                                  const double* d_point_x, const double* d_point_y, const double* d_point_z, const double* wpts,
                                  const float4* d_atoms, const int* d_i_atom_for_point,
                                  double* d_gradient_cache_x, double* d_gradient_cache_y, double* d_gradient_cache_z,
-                                 const double* d_p_cache, const double* d_interatomic_quantities,
+                                 const double* d_interatomic_quantities, const double switch_function_threshold,
                                  const double image_cutoff_radius, const LatticeVector unit_cell);
     void weight_gradient_center_atom(const int n_grid, const int n_block, const int n_point, const int n_atom, const int n_point_per_grid, const int* d_i_atom_for_point,
                                      double* d_gradient_cache_x, double* d_gradient_cache_y, double* d_gradient_cache_z);
