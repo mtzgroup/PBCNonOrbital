@@ -214,7 +214,9 @@ namespace PeriodicBox
 
     __device__ double3 smooth_function_dmudB(const double A[3], const double B[3], const double point[3], const double a_ab, const bool A_equal_B)
     {
-        return smooth_function_dmudA(B, A, point, a_ab, A_equal_B);
+        const double3 dmudA = smooth_function_dmudA(B, A, point, a_ab, A_equal_B);
+        double3 dmudB; dmudB.x = -dmudA.x; dmudB.y = -dmudA.y; dmudB.z = -dmudA.z;
+        return dmudB;
     }
 
     static __device__ double switch_function_dsdx_over_s(const double m)
@@ -409,7 +411,6 @@ namespace PeriodicBox
 
         // $$\sum_{\vec{P}_3 \in Z^3} \frac{\partial P^{PBC}(\vec{G} + \vec{P}_3, \vec{r}) }{\partial \vec{G}}$$
 
-        double dP_G_dG_sum[3] { 0.0, 0.0, 0.0 };
         for (int i_image2_x = -image1_negative_bound[0]; i_image2_x <= image1_positive_bound[0]; i_image2_x++)
             for (int i_image2_y = -image1_negative_bound[1]; i_image2_y <= image1_positive_bound[1]; i_image2_y++)
                 for (int i_image2_z = -image1_negative_bound[2]; i_image2_z <= image1_positive_bound[2]; i_image2_z++) {
@@ -449,7 +450,7 @@ namespace PeriodicBox
                                     const double mu = (rG - rB) * one_over_BG;
 
                                     const double dsdmu_over_s = switch_function_dsdmu_over_s(mu, a_BG);
-                                    const double3 dmuGBdG = smooth_function_dmudB(atom_g_image, atom_b_image, point, a_BG, i_atom_b == i_derivative_atom);
+                                    const double3 dmuGBdG = smooth_function_dmudA(atom_g_image, atom_b_image, point, a_BG, i_atom_b == i_derivative_atom);
                                     if (!(i_atom_b == i_derivative_atom && i_image3_x == i_image2_x && i_image3_y == i_image2_y && i_image3_z == i_image2_z)) {
                                         dP_G_dG[0] += dsdmu_over_s * dmuGBdG.x;
                                         dP_G_dG[1] += dsdmu_over_s * dmuGBdG.y;
@@ -461,22 +462,17 @@ namespace PeriodicBox
                     dP_G_dG[0] *= P_G;
                     dP_G_dG[1] *= P_G;
                     dP_G_dG[2] *= P_G;
-                    dP_G_dG_sum[0] += dP_G_dG[0];
-                    dP_G_dG_sum[1] += dP_G_dG[1];
-                    dP_G_dG_sum[2] += dP_G_dG[2];
+                    dP_B_dG_sum[0] += dP_G_dG[0];
+                    dP_B_dG_sum[1] += dP_G_dG[1];
+                    dP_B_dG_sum[2] += dP_G_dG[2];
                 }
 
-        // Combine the three pieces
-
-        dP_B_dG_sum[0] += dP_G_dG_sum[0];
-        dP_B_dG_sum[1] += dP_G_dG_sum[1];
-        dP_B_dG_sum[2] += dP_G_dG_sum[2];
+        // Combine the two pieces
 
         const double point_weight = d_point_w[i_point];
-        // Henry 20250302: I don't understand the overall negative sign.
-        d_gradient_cache_x[i_point + i_derivative_atom * n_point_per_grid] += - point_weight / P_B_sum * (dP_A_dG[0] - P_A / P_B_sum * dP_B_dG_sum[0]);
-        d_gradient_cache_y[i_point + i_derivative_atom * n_point_per_grid] += - point_weight / P_B_sum * (dP_A_dG[1] - P_A / P_B_sum * dP_B_dG_sum[1]);
-        d_gradient_cache_z[i_point + i_derivative_atom * n_point_per_grid] += - point_weight / P_B_sum * (dP_A_dG[2] - P_A / P_B_sum * dP_B_dG_sum[2]);
+        d_gradient_cache_x[i_point + i_derivative_atom * n_point_per_grid] += point_weight / P_B_sum * (dP_A_dG[0] - P_A / P_B_sum * dP_B_dG_sum[0]);
+        d_gradient_cache_y[i_point + i_derivative_atom * n_point_per_grid] += point_weight / P_B_sum * (dP_A_dG[1] - P_A / P_B_sum * dP_B_dG_sum[1]);
+        d_gradient_cache_z[i_point + i_derivative_atom * n_point_per_grid] += point_weight / P_B_sum * (dP_A_dG[2] - P_A / P_B_sum * dP_B_dG_sum[2]);
     }
 
     void weight_gradient_compute(const dim3 n_grid, const dim3 n_block, const int n_point, const int n_atom, const int n_point_per_grid,

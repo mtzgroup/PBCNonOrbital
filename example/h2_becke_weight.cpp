@@ -4313,6 +4313,8 @@ int main()
         -0.0019613113,
     };
 
+    // Analytical
+
     double* analytical_gradient = new double[n_atom * 3];
     memset(analytical_gradient, 0, n_atom * 3 * sizeof(double));
 
@@ -4322,32 +4324,86 @@ int main()
         printf("Analytical gradient %2d  %15.10f  %15.10f  %15.10f\n",
             i_atom, analytical_gradient[i_atom * 3 + 0], analytical_gradient[i_atom * 3 + 1], analytical_gradient[i_atom * 3 + 2]);
 
+    delete[] analytical_gradient;
+
+    // Numerical
+
+    double* numerical_gradient  = new double[n_atom * 3];
+    memset(numerical_gradient,  0, n_atom * 3 * sizeof(double));
+
     double* atom_xyz_copy = new double[n_atom * 3];
     memcpy(atom_xyz_copy, atom_xyz, n_atom * 3 * sizeof(double));
+    PeriodicBox::GridPoint* grid_points_copy = new PeriodicBox::GridPoint[n_grid_point];
+    memcpy(grid_points_copy, grid_points, n_grid_point * sizeof(PeriodicBox::GridPoint));
 
     const double dx = 1e-4;
 
-    const double numerical_gradient[n_atom * 3]
+    for (int i_atom = 0; i_atom < n_atom; i_atom++)
+        for (int i_xyz = 0; i_xyz < 3; i_xyz++) {
+            atom_xyz_copy[i_atom * 3 + i_xyz] = atom_xyz[i_atom * 3 + i_xyz] + dx;
+            for (int i_point = 0; i_point < n_grid_point; i_point++) {
+                grid_points_copy[i_point].w_total = NAN;
+                if (grid_points[i_point].i_atom == i_atom) {
+                    grid_points_copy[i_point].x = grid_points[i_point].x + ((i_xyz == 0) ? dx : 0);
+                    grid_points_copy[i_point].y = grid_points[i_point].y + ((i_xyz == 1) ? dx : 0);
+                    grid_points_copy[i_point].z = grid_points[i_point].z + ((i_xyz == 2) ? dx : 0);
+                }
+            }
+            BeckeWeights(n_grid_point, grid_points_copy, n_atom, atom_xyz_copy, atom_radius, periodic_parameter.lattice.unit_cell);
+            const double E_plus = becke_energy(n_grid_point, grid_points_copy, epsilon_xc);
+
+            atom_xyz_copy[i_atom * 3 + i_xyz] = atom_xyz[i_atom * 3 + i_xyz] - dx;
+            for (int i_point = 0; i_point < n_grid_point; i_point++) {
+                grid_points_copy[i_point].w_total = NAN;
+                if (grid_points[i_point].i_atom == i_atom) {
+                    grid_points_copy[i_point].x = grid_points[i_point].x - ((i_xyz == 0) ? dx : 0);
+                    grid_points_copy[i_point].y = grid_points[i_point].y - ((i_xyz == 1) ? dx : 0);
+                    grid_points_copy[i_point].z = grid_points[i_point].z - ((i_xyz == 2) ? dx : 0);
+                }
+            }
+            BeckeWeights(n_grid_point, grid_points_copy, n_atom, atom_xyz_copy, atom_radius, periodic_parameter.lattice.unit_cell);
+            const double E_minus = becke_energy(n_grid_point, grid_points_copy, epsilon_xc);
+
+            numerical_gradient[i_atom * 3 + i_xyz] = (E_plus - E_minus) / dx / 2.0;
+
+            atom_xyz_copy[i_atom * 3 + i_xyz] = atom_xyz[i_atom * 3 + i_xyz];
+            for (int i_point = 0; i_point < n_grid_point; i_point++) {
+                if (grid_points[i_point].i_atom == i_atom) {
+                    grid_points_copy[i_point].x = grid_points[i_point].x;
+                    grid_points_copy[i_point].y = grid_points[i_point].y;
+                    grid_points_copy[i_point].z = grid_points[i_point].z;
+                }
+            }
+        }
+
+
+    for (int i_atom = 0; i_atom < n_atom; i_atom++)
+        printf("Numerical gradient  %2d  %15.10f  %15.10f  %15.10f\n",
+            i_atom, numerical_gradient[i_atom * 3 + 0], numerical_gradient[i_atom * 3 + 1], numerical_gradient[i_atom * 3 + 2]);
+
+    delete[] atom_xyz_copy;
+    delete[] grid_points_copy;
+    delete[] numerical_gradient;
+
+    // Reference
+
+    const double reference_gradient[n_atom * 3]
     {
         0.0, 0.0,  0.2553750763,
         0.0, 0.0, -0.2553750763,
     };
 
     for (int i_atom = 0; i_atom < n_atom; i_atom++)
-        printf("Numerical gradient %2d  %15.10f  %15.10f  %15.10f\n",
-            i_atom, numerical_gradient[i_atom * 3 + 0], numerical_gradient[i_atom * 3 + 1], numerical_gradient[i_atom * 3 + 2]);
+        printf("Reference gradient  %2d  %15.10f  %15.10f  %15.10f\n",
+            i_atom, reference_gradient[i_atom * 3 + 0], reference_gradient[i_atom * 3 + 1], reference_gradient[i_atom * 3 + 2]);
 
     double max_abs_diff = 0.0;
     for (int i_atom = 0; i_atom < n_atom; i_atom++)
         for (int i_xyz = 0; i_xyz < 3; i_xyz++) {
-            const double abs_diff = fabs(analytical_gradient[i_atom * 3 + i_xyz] - numerical_gradient[i_atom * 3 + i_xyz]);
+            const double abs_diff = fabs(analytical_gradient[i_atom * 3 + i_xyz] - reference_gradient[i_atom * 3 + i_xyz]);
             if (abs_diff > max_abs_diff) max_abs_diff = abs_diff;
         }
     printf("\nMax abs diff between analytical and numerical: %.5e\n", max_abs_diff);
-
-
-    delete[] analytical_gradient;
-    delete[] atom_xyz_copy;
 
     return 0;
 }
