@@ -182,38 +182,39 @@ namespace PeriodicBox
         const double Ar[3] { A[0] - point[0], A[1] - point[1], A[2] - point[2] };
         const double Br[3] { B[0] - point[0], B[1] - point[1], B[2] - point[2] };
         const double AB[3] { A[0] - B[0], A[1] - B[1], A[2] - B[2] };
+        const double norm_Ar = sqrt(Ar[0] * Ar[0] + Ar[1] * Ar[1] + Ar[2] * Ar[2]);
+        const double norm_Br = sqrt(Br[0] * Br[0] + Br[1] * Br[1] + Br[2] * Br[2]);
+        const double one_over_Ar = (norm_Ar > DIVIDE_BY_ZERO_PROTECTION_THRESHOLD) ? (1.0 / norm_Ar) : 0.0;
+        const double one_over_AB = get_one_over_r(A[0], A[1], A[2], B[0], B[1], B[2]);
+        const double normalized_Ar[3] = { Ar[0] * one_over_Ar, Ar[1] * one_over_Ar, Ar[2] * one_over_Ar };
+        const double mu = (norm_Ar - norm_Br) * one_over_AB;
         if (!A_equal_B) {
-            const double norm_Ar = sqrt(Ar[0] * Ar[0] + Ar[1] * Ar[1] + Ar[2] * Ar[2]);
-            const double norm_Br = sqrt(Br[0] * Br[0] + Br[1] * Br[1] + Br[2] * Br[2]);
-            const double one_over_Ar = (norm_Ar > DIVIDE_BY_ZERO_PROTECTION_THRESHOLD) ? (1.0 / norm_Ar) : 0.0;
-            const double one_over_AB = get_one_over_r(A[0], A[1], A[2], B[0], B[1], B[2]);
-            const double mu = (norm_Ar - norm_Br) * one_over_AB;
-            const double normalized_Ar[3] = { (A[0] - point[0]) * one_over_Ar, (A[1] - point[1]) * one_over_Ar, (A[2] - point[2]) * one_over_Ar };
-            const double normalized_AB[3] = { (A[0] - B[0]) * one_over_AB, (A[1] - B[1]) * one_over_AB, (A[2] - B[2]) * one_over_AB };
+            const double normalized_AB[3] = { AB[0] * one_over_AB, AB[1] * one_over_AB, AB[2] * one_over_AB };
             double3 gradient;
             gradient.x = one_over_AB * (normalized_Ar[0] - mu * normalized_AB[0]);
             gradient.y = one_over_AB * (normalized_Ar[1] - mu * normalized_AB[1]);
             gradient.z = one_over_AB * (normalized_Ar[2] - mu * normalized_AB[2]);
+            gradient.x *= (1.0 - 2.0 * a_ab * mu); // TODO: Check if this is correct with different elements
+            gradient.y *= (1.0 - 2.0 * a_ab * mu); // TODO: Check if this is correct with different elements
+            gradient.z *= (1.0 - 2.0 * a_ab * mu); // TODO: Check if this is correct with different elements
             return gradient;
         } else {
-            const double one_over_Ar = get_one_over_r(A[0], A[1], A[2], point[0], point[1], point[2]);
             const double one_over_Br = get_one_over_r(B[0], B[1], B[2], point[0], point[1], point[2]);
-            const double one_over_AB = get_one_over_r(A[0], A[1], A[2], B[0], B[1], B[2]);
-            const double normalized_Ar[3] = { (A[0] - point[0]) * one_over_Ar, (A[1] - point[1]) * one_over_Ar, (A[2] - point[2]) * one_over_Ar };
-            const double normalized_Br[3] = { (B[0] - point[0]) * one_over_Br, (B[1] - point[1]) * one_over_Br, (B[2] - point[2]) * one_over_Br };
+            const double normalized_Br[3] = { Br[0] * one_over_Br, Br[1] * one_over_Br, Br[2] * one_over_Br };
             double3 gradient;
             gradient.x = one_over_AB * (normalized_Ar[0] - normalized_Br[0]);
             gradient.y = one_over_AB * (normalized_Ar[1] - normalized_Br[1]);
             gradient.z = one_over_AB * (normalized_Ar[2] - normalized_Br[2]);
+            gradient.x *= (1.0 - 2.0 * a_ab * mu); // TODO: Check if this is correct with different elements
+            gradient.y *= (1.0 - 2.0 * a_ab * mu); // TODO: Check if this is correct with different elements
+            gradient.z *= (1.0 - 2.0 * a_ab * mu); // TODO: Check if this is correct with different elements
             return gradient;
         }
     }
 
     __device__ double3 smooth_function_dmudB(const double A[3], const double B[3], const double point[3], const double a_ab, const bool A_equal_B)
     {
-        const double3 dmudA = smooth_function_dmudA(A, B, point, a_ab, A_equal_B);
-        double3 dmudB; dmudB.x = -dmudA.x; dmudB.y = -dmudA.y; dmudB.z = -dmudA.z;
-        return dmudB;
+        return smooth_function_dmudA(B, A, point, a_ab, A_equal_B);
     }
 
     static __device__ double switch_function_dsdx_over_s(const double m)
@@ -233,6 +234,51 @@ namespace PeriodicBox
         const double nu = mu + a_ab * (1.0 - mu * mu);
         const double dnudmu = 1.0 - 2.0 * a_ab * mu;
         return switch_function_dsdx_over_s(nu) * dnudmu;
+    }
+
+    // Note: This value cannot be cached, because atom_a can be any image of i_atom_a.
+    static __device__ double compute_P_A(const double* atom_a, const int i_atom_a, const double* point,
+                                         const int n_atom,
+                                         const float4* d_atoms,
+                                         const double* d_interatomic_quantities, const double switch_function_threshold,
+                                         const double image_cutoff_radius, const PeriodicKernelDataReal<double> periodic_data)
+    {
+        const double ra = get_r(atom_a[0], atom_a[1], atom_a[2], point[0], point[1], point[2]);
+
+        double p_a = 1.0;
+        for (int i_atom_b = 0; i_atom_b < n_atom; i_atom_b++) {
+            const double a_ab = d_interatomic_quantities[i_atom_a * n_atom + i_atom_b];
+            double atom_b[3] = { d_atoms[i_atom_b].x, d_atoms[i_atom_b].y, d_atoms[i_atom_b].z };
+            periodic_data.move_to_same_image(atom_a, atom_b);
+
+            const double atom_b_to_reference[3] { atom_b[0] - atom_a[0], atom_b[1] - atom_a[1], atom_b[2] - atom_a[2] };
+            int image2_positive_bound[3] { 0, 0, 0 };
+            int image2_negative_bound[3] { 0, 0, 0 };
+            periodic_data.get_cube_bound_real(image2_positive_bound, image2_negative_bound, atom_b_to_reference, image_cutoff_radius);
+
+            for (int i_image2_x = -image2_negative_bound[0]; i_image2_x <= image2_positive_bound[0]; i_image2_x++)
+                for (int i_image2_y = -image2_negative_bound[1]; i_image2_y <= image2_positive_bound[1]; i_image2_y++)
+                    for (int i_image2_z = -image2_negative_bound[2]; i_image2_z <= image2_positive_bound[2]; i_image2_z++) {
+                        double lattice_image_b[3];
+                        periodic_data.get_absolute_coord_real(lattice_image_b, i_image2_x, i_image2_y, i_image2_z);
+                        const double atom_image_b[3] = { atom_b[0] + lattice_image_b[0], atom_b[1] + lattice_image_b[1], atom_b[2] + lattice_image_b[2] };
+
+                        if ( (i_atom_a != i_atom_b) ||
+                            !(i_image2_x == 0 && i_image2_y == 0 && i_image2_z == 0) ) {
+                            const double one_over_rab = get_one_over_r(atom_a[0], atom_a[1], atom_a[2], atom_image_b[0], atom_image_b[1], atom_image_b[2]);
+                            const double rb = get_r(atom_image_b[0], atom_image_b[1], atom_image_b[2], point[0], point[1], point[2]);
+                            const double mu = (ra - rb) * one_over_rab;
+                            // Refer to equation A2 in the original Becke paper for the next equation
+                            const double nu = mu + a_ab * (1.0 - mu * mu);
+                            p_a *= switch_function(nu);
+                            if (p_a < switch_function_threshold) {
+                                return 0.0;
+                            }
+                        }
+                    }
+        }
+
+        return p_a;
     }
 
     __global__ void weight_gradient_compute_kernel(const int n_point, const int n_atom, const int n_point_per_grid,
@@ -265,11 +311,20 @@ namespace PeriodicBox
         int image1_negative_bound[3] { 0, 0, 0 };
         periodic_data.get_cube_bound_real(image1_positive_bound, image1_negative_bound, AG_without_offset, image_cutoff_radius);
 
+        const double P_A = compute_P_A(atom_a, i_center_atom, point, n_atom, d_atoms,
+                                       d_interatomic_quantities, switch_function_threshold, image_cutoff_radius, periodic_data);
+        if (P_A < switch_function_threshold) {
+            d_gradient_cache_x[i_point + i_derivative_atom * n_point_per_grid] = 0.0;
+            d_gradient_cache_y[i_point + i_derivative_atom * n_point_per_grid] = 0.0;
+            d_gradient_cache_z[i_point + i_derivative_atom * n_point_per_grid] = 0.0;
+            return;
+        }
+
         double dP_A_dG[3] { 0.0, 0.0, 0.0 };
-        double P_A = 1.0;
         for (int i_image1_x = -image1_negative_bound[0]; i_image1_x <= image1_positive_bound[0]; i_image1_x++)
             for (int i_image1_y = -image1_negative_bound[1]; i_image1_y <= image1_positive_bound[1]; i_image1_y++)
                 for (int i_image1_z = -image1_negative_bound[2]; i_image1_z <= image1_positive_bound[2]; i_image1_z++) {
+
                     double lattice_image_g[3];
                     periodic_data.get_absolute_coord_real(lattice_image_g, i_image1_x, i_image1_y, i_image1_z);
                     const double atom_g_image[3] = { atom_g[0] + lattice_image_g[0], atom_g[1] + lattice_image_g[1], atom_g[2] + lattice_image_g[2] };
@@ -277,14 +332,6 @@ namespace PeriodicBox
                     const double one_over_AG = get_one_over_r(atom_a[0], atom_a[1], atom_a[2], atom_g_image[0], atom_g_image[1], atom_g_image[2]);
                     const double rG = get_r(atom_g_image[0], atom_g_image[1], atom_g_image[2], point[0], point[1], point[2]);
                     const double mu = (rA - rG) * one_over_AG;
-                    const double nu = mu + a_AG * (1.0 - mu * mu);
-                    P_A *= switch_function(nu);
-                    if (P_A < switch_function_threshold) {
-                        d_gradient_cache_x[i_point + i_derivative_atom * n_point_per_grid] = 0.0;
-                        d_gradient_cache_y[i_point + i_derivative_atom * n_point_per_grid] = 0.0;
-                        d_gradient_cache_z[i_point + i_derivative_atom * n_point_per_grid] = 0.0;
-                        return;
-                    }
 
                     const double dsdmu_over_s = switch_function_dsdmu_over_s(mu, a_AG);
                     const double3 dmudG = smooth_function_dmudB(atom_a, atom_g_image, point, a_AG, false);
@@ -299,6 +346,10 @@ namespace PeriodicBox
         dP_A_dG[2] *= P_A;
 
         // $$\sum_{B}^{N_{atom}} \sum_{\vec{P}_3 \in Z^3} \frac{\partial P^{PBC}(\vec{B} + \vec{P}_3, \vec{r}) }{\partial \vec{G}}$$
+
+        const double P_G = compute_P_A(atom_g, i_derivative_atom, point, n_atom, d_atoms,
+            d_interatomic_quantities, switch_function_threshold, image_cutoff_radius, periodic_data);
+        double dP_G_dG[3] { 0.0, 0.0, 0.0 };
 
         double dP_B_dG_sum[3] { 0.0, 0.0, 0.0 };
         double P_B_sum = 0.0;
@@ -322,8 +373,26 @@ namespace PeriodicBox
 
                         const double rB = get_r(atom_b_image[0], atom_b_image[1], atom_b_image[2], point[0], point[1], point[2]);
 
+                        if (P_G >= switch_function_threshold) {
+                            const double one_over_BG = get_one_over_r(atom_b_image[0], atom_b_image[1], atom_b_image[2], atom_g[0], atom_g[1], atom_g[2]);
+                            const double rG = get_r(atom_g[0], atom_g[1], atom_g[2], point[0], point[1], point[2]);
+                            const double mu = (rG - rB) * one_over_BG;
+
+                            const double dsdmu_over_s = switch_function_dsdmu_over_s(mu, a_BG);
+                            const double3 dmuGBdG = smooth_function_dmudB(atom_g, atom_b_image, point, a_BG, i_atom_b == i_derivative_atom);
+                            if (!(i_atom_b == i_derivative_atom && i_image3_x == 0 && i_image3_y == 0 && i_image3_z == 0)) {
+                                dP_G_dG[0] += dsdmu_over_s * dmuGBdG.x;
+                                dP_G_dG[1] += dsdmu_over_s * dmuGBdG.y;
+                                dP_G_dG[2] += dsdmu_over_s * dmuGBdG.z;
+                            }
+                        }
+
+                        const double P_B = compute_P_A(atom_b_image, i_atom_b, point, n_atom, d_atoms,
+                                                       d_interatomic_quantities, switch_function_threshold, image_cutoff_radius, periodic_data);
+                        if (P_B < switch_function_threshold)
+                            continue;
+
                         double dP_B_dG[3] { 0.0, 0.0, 0.0 };
-                        double P_B = 1.0;
                         for (int i_image2_x = -image3_negative_bound[0]; i_image2_x <= image3_positive_bound[0]; i_image2_x++)
                             for (int i_image2_y = -image3_negative_bound[1]; i_image2_y <= image3_positive_bound[1]; i_image2_y++)
                                 for (int i_image2_z = -image3_negative_bound[2]; i_image2_z <= image3_positive_bound[2]; i_image2_z++) {
@@ -334,18 +403,15 @@ namespace PeriodicBox
                                     const double one_over_BG = get_one_over_r(atom_b_image[0], atom_b_image[1], atom_b_image[2], atom_g_image[0], atom_g_image[1], atom_g_image[2]);
                                     const double rG = get_r(atom_g_image[0], atom_g_image[1], atom_g_image[2], point[0], point[1], point[2]);
                                     const double mu = (rB - rG) * one_over_BG;
-                                    const double nu = mu + a_BG * (1.0 - mu * mu);
-                                    P_B *= switch_function(nu);
-                                    if (P_B < switch_function_threshold) {
-                                        goto jump_out_g_image_loop;
-                                    }
 
                                     const double dsdmu_over_s = switch_function_dsdmu_over_s(mu, a_BG);
-                                    const double3 dmudG = smooth_function_dmudB(atom_a, atom_g_image, point, a_AG, i_atom_b == i_derivative_atom);
+                                    const double3 dmuBGdG = smooth_function_dmudB(atom_b_image, atom_g_image, point, a_BG, false);
 
-                                    dP_B_dG[0] += dsdmu_over_s * dmudG.x;
-                                    dP_B_dG[1] += dsdmu_over_s * dmudG.y;
-                                    dP_B_dG[2] += dsdmu_over_s * dmudG.z;
+                                    if (i_atom_b != i_derivative_atom) {
+                                        dP_B_dG[0] += dsdmu_over_s * dmuBGdG.x;
+                                        dP_B_dG[1] += dsdmu_over_s * dmuBGdG.y;
+                                        dP_B_dG[2] += dsdmu_over_s * dmuBGdG.z;
+                                    }
                                 }
 
                         dP_B_dG[0] *= P_B;
@@ -355,17 +421,20 @@ namespace PeriodicBox
                         dP_B_dG_sum[1] += dP_B_dG[1];
                         dP_B_dG_sum[2] += dP_B_dG[2];
                         P_B_sum += P_B;
-
-                        jump_out_g_image_loop: ;
                     }
         }
+
+        dP_B_dG_sum[0] += dP_G_dG[0] * P_G;
+        dP_B_dG_sum[1] += dP_G_dG[1] * P_G;
+        dP_B_dG_sum[2] += dP_G_dG[2] * P_G;
 
         // Combine the two pieces
 
         const double point_weight = d_point_w[i_point];
-        d_gradient_cache_x[i_point + i_derivative_atom * n_point_per_grid] += point_weight / P_B_sum * (dP_A_dG[0] + P_A / P_B_sum * dP_B_dG_sum[0]);
-        d_gradient_cache_y[i_point + i_derivative_atom * n_point_per_grid] += point_weight / P_B_sum * (dP_A_dG[1] + P_A / P_B_sum * dP_B_dG_sum[1]);
-        d_gradient_cache_z[i_point + i_derivative_atom * n_point_per_grid] += point_weight / P_B_sum * (dP_A_dG[2] + P_A / P_B_sum * dP_B_dG_sum[2]);
+        // Henry 20250302: I don't understand the overall negative sign.
+        d_gradient_cache_x[i_point + i_derivative_atom * n_point_per_grid] += - point_weight / P_B_sum * (dP_A_dG[0] - P_A / P_B_sum * dP_B_dG_sum[0]);
+        d_gradient_cache_y[i_point + i_derivative_atom * n_point_per_grid] += - point_weight / P_B_sum * (dP_A_dG[1] - P_A / P_B_sum * dP_B_dG_sum[1]);
+        d_gradient_cache_z[i_point + i_derivative_atom * n_point_per_grid] += - point_weight / P_B_sum * (dP_A_dG[2] - P_A / P_B_sum * dP_B_dG_sum[2]);
     }
 
     void weight_gradient_compute(const dim3 n_grid, const dim3 n_block, const int n_point, const int n_atom, const int n_point_per_grid,
