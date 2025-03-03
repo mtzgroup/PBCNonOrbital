@@ -194,9 +194,6 @@ namespace PeriodicBox
             gradient.x = one_over_AB * (normalized_Ar[0] - mu * normalized_AB[0]);
             gradient.y = one_over_AB * (normalized_Ar[1] - mu * normalized_AB[1]);
             gradient.z = one_over_AB * (normalized_Ar[2] - mu * normalized_AB[2]);
-            gradient.x *= (1.0 - 2.0 * a_ab * mu); // TODO: Check if this is correct with different elements
-            gradient.y *= (1.0 - 2.0 * a_ab * mu); // TODO: Check if this is correct with different elements
-            gradient.z *= (1.0 - 2.0 * a_ab * mu); // TODO: Check if this is correct with different elements
             return gradient;
         } else {
             const double one_over_Br = get_one_over_r(B[0], B[1], B[2], point[0], point[1], point[2]);
@@ -205,9 +202,6 @@ namespace PeriodicBox
             gradient.x = one_over_AB * (normalized_Ar[0] - normalized_Br[0]);
             gradient.y = one_over_AB * (normalized_Ar[1] - normalized_Br[1]);
             gradient.z = one_over_AB * (normalized_Ar[2] - normalized_Br[2]);
-            gradient.x *= (1.0 - 2.0 * a_ab * mu); // TODO: Check if this is correct with different elements
-            gradient.y *= (1.0 - 2.0 * a_ab * mu); // TODO: Check if this is correct with different elements
-            gradient.z *= (1.0 - 2.0 * a_ab * mu); // TODO: Check if this is correct with different elements
             return gradient;
         }
     }
@@ -431,7 +425,7 @@ namespace PeriodicBox
                         double atom_b[3] { d_atoms[i_atom_b].x, d_atoms[i_atom_b].y, d_atoms[i_atom_b].z };
                         periodic_data.move_to_same_image(atom_a, atom_b);
 
-                        const double a_BG = d_interatomic_quantities[i_atom_b * n_atom + i_derivative_atom];
+                        const double a_GB = d_interatomic_quantities[i_derivative_atom * n_atom + i_atom_b];
 
                         const double BG_without_offset[3] { atom_b[0] - atom_g[0], atom_b[1] - atom_g[1], atom_b[2] - atom_g[2] };
                         int image3_positive_bound[3] { 0, 0, 0 };
@@ -449,8 +443,8 @@ namespace PeriodicBox
                                     const double rB = get_r(atom_b_image[0], atom_b_image[1], atom_b_image[2], point[0], point[1], point[2]);
                                     const double mu = (rG - rB) * one_over_BG;
 
-                                    const double dsdmu_over_s = switch_function_dsdmu_over_s(mu, a_BG);
-                                    const double3 dmuGBdG = smooth_function_dmudA(atom_g_image, atom_b_image, point, a_BG, i_atom_b == i_derivative_atom);
+                                    const double dsdmu_over_s = switch_function_dsdmu_over_s(mu, a_GB);
+                                    const double3 dmuGBdG = smooth_function_dmudA(atom_g_image, atom_b_image, point, a_GB, i_atom_b == i_derivative_atom);
                                     if (!(i_atom_b == i_derivative_atom && i_image3_x == i_image2_x && i_image3_y == i_image2_y && i_image3_z == i_image2_z)) {
                                         dP_G_dG[0] += dsdmu_over_s * dmuGBdG.x;
                                         dP_G_dG[1] += dsdmu_over_s * dmuGBdG.y;

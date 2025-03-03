@@ -4313,6 +4313,18 @@ int main()
         -0.0019613113,
     };
 
+    // Reference
+
+    const double reference_gradient[n_atom * 3]
+    {
+        0.0, 0.0,  0.2553750763,
+        0.0, 0.0, -0.2553750763,
+    };
+
+    for (int i_atom = 0; i_atom < n_atom; i_atom++)
+        printf("Reference gradient  %2d  %15.10f  %15.10f  %15.10f\n",
+            i_atom, reference_gradient[i_atom * 3 + 0], reference_gradient[i_atom * 3 + 1], reference_gradient[i_atom * 3 + 2]);
+
     // Analytical
 
     double* analytical_gradient = new double[n_atom * 3];
@@ -4381,29 +4393,17 @@ int main()
         printf("Numerical gradient  %2d  %15.10f  %15.10f  %15.10f\n",
             i_atom, numerical_gradient[i_atom * 3 + 0], numerical_gradient[i_atom * 3 + 1], numerical_gradient[i_atom * 3 + 2]);
 
-    delete[] atom_xyz_copy;
-    delete[] grid_points_copy;
-    delete[] numerical_gradient;
-
-    // Reference
-
-    const double reference_gradient[n_atom * 3]
-    {
-        0.0, 0.0,  0.2553750763,
-        0.0, 0.0, -0.2553750763,
-    };
-
-    for (int i_atom = 0; i_atom < n_atom; i_atom++)
-        printf("Reference gradient  %2d  %15.10f  %15.10f  %15.10f\n",
-            i_atom, reference_gradient[i_atom * 3 + 0], reference_gradient[i_atom * 3 + 1], reference_gradient[i_atom * 3 + 2]);
-
     double max_abs_diff = 0.0;
     for (int i_atom = 0; i_atom < n_atom; i_atom++)
         for (int i_xyz = 0; i_xyz < 3; i_xyz++) {
-            const double abs_diff = fabs(analytical_gradient[i_atom * 3 + i_xyz] - reference_gradient[i_atom * 3 + i_xyz]);
+            const double abs_diff = fabs(analytical_gradient[i_atom * 3 + i_xyz] - numerical_gradient[i_atom * 3 + i_xyz]);
             if (abs_diff > max_abs_diff) max_abs_diff = abs_diff;
         }
     printf("\nMax abs diff between analytical and numerical: %.5e\n", max_abs_diff);
+
+    delete[] atom_xyz_copy;
+    delete[] grid_points_copy;
+    delete[] numerical_gradient;
 
     return 0;
 }
