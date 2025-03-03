@@ -345,15 +345,14 @@ namespace PeriodicBox
         dP_A_dG[1] *= P_A;
         dP_A_dG[2] *= P_A;
 
-        // $$\sum_{B}^{N_{atom}} \sum_{\vec{P}_3 \in Z^3} \frac{\partial P^{PBC}(\vec{B} + \vec{P}_3, \vec{r}) }{\partial \vec{G}}$$
-
-        const double P_G = compute_P_A(atom_g, i_derivative_atom, point, n_atom, d_atoms,
-            d_interatomic_quantities, switch_function_threshold, image_cutoff_radius, periodic_data);
-        double dP_G_dG[3] { 0.0, 0.0, 0.0 };
+        // $$\sum_{B \neq G}^{N_{atom}} \sum_{\vec{P}_3 \in Z^3} \frac{\partial P^{PBC}(\vec{B} + \vec{P}_3, \vec{r}) }{\partial \vec{G}}$$
 
         double dP_B_dG_sum[3] { 0.0, 0.0, 0.0 };
         double P_B_sum = 0.0;
         for (int i_atom_b = 0; i_atom_b < n_atom; i_atom_b++) {
+            if (i_atom_b == i_derivative_atom)
+                continue;
+
             double atom_b[3] { d_atoms[i_atom_b].x, d_atoms[i_atom_b].y, d_atoms[i_atom_b].z };
             periodic_data.move_to_same_image(atom_a, atom_b);
 
@@ -371,26 +370,13 @@ namespace PeriodicBox
                         periodic_data.get_absolute_coord_real(lattice_image_b, i_image3_x, i_image3_y, i_image3_z);
                         const double atom_b_image[3] = { atom_b[0] + lattice_image_b[0], atom_b[1] + lattice_image_b[1], atom_b[2] + lattice_image_b[2] };
 
-                        const double rB = get_r(atom_b_image[0], atom_b_image[1], atom_b_image[2], point[0], point[1], point[2]);
-
-                        if (P_G >= switch_function_threshold) {
-                            const double one_over_BG = get_one_over_r(atom_b_image[0], atom_b_image[1], atom_b_image[2], atom_g[0], atom_g[1], atom_g[2]);
-                            const double rG = get_r(atom_g[0], atom_g[1], atom_g[2], point[0], point[1], point[2]);
-                            const double mu = (rG - rB) * one_over_BG;
-
-                            const double dsdmu_over_s = switch_function_dsdmu_over_s(mu, a_BG);
-                            const double3 dmuGBdG = smooth_function_dmudB(atom_g, atom_b_image, point, a_BG, i_atom_b == i_derivative_atom);
-                            if (!(i_atom_b == i_derivative_atom && i_image3_x == 0 && i_image3_y == 0 && i_image3_z == 0)) {
-                                dP_G_dG[0] += dsdmu_over_s * dmuGBdG.x;
-                                dP_G_dG[1] += dsdmu_over_s * dmuGBdG.y;
-                                dP_G_dG[2] += dsdmu_over_s * dmuGBdG.z;
-                            }
-                        }
-
                         const double P_B = compute_P_A(atom_b_image, i_atom_b, point, n_atom, d_atoms,
                                                        d_interatomic_quantities, switch_function_threshold, image_cutoff_radius, periodic_data);
                         if (P_B < switch_function_threshold)
                             continue;
+                        P_B_sum += P_B;
+
+                        const double rB = get_r(atom_b_image[0], atom_b_image[1], atom_b_image[2], point[0], point[1], point[2]);
 
                         double dP_B_dG[3] { 0.0, 0.0, 0.0 };
                         for (int i_image2_x = -image3_negative_bound[0]; i_image2_x <= image3_positive_bound[0]; i_image2_x++)
@@ -407,11 +393,9 @@ namespace PeriodicBox
                                     const double dsdmu_over_s = switch_function_dsdmu_over_s(mu, a_BG);
                                     const double3 dmuBGdG = smooth_function_dmudB(atom_b_image, atom_g_image, point, a_BG, false);
 
-                                    if (i_atom_b != i_derivative_atom) {
-                                        dP_B_dG[0] += dsdmu_over_s * dmuBGdG.x;
-                                        dP_B_dG[1] += dsdmu_over_s * dmuBGdG.y;
-                                        dP_B_dG[2] += dsdmu_over_s * dmuBGdG.z;
-                                    }
+                                    dP_B_dG[0] += dsdmu_over_s * dmuBGdG.x;
+                                    dP_B_dG[1] += dsdmu_over_s * dmuBGdG.y;
+                                    dP_B_dG[2] += dsdmu_over_s * dmuBGdG.z;
                                 }
 
                         dP_B_dG[0] *= P_B;
@@ -420,15 +404,73 @@ namespace PeriodicBox
                         dP_B_dG_sum[0] += dP_B_dG[0];
                         dP_B_dG_sum[1] += dP_B_dG[1];
                         dP_B_dG_sum[2] += dP_B_dG[2];
-                        P_B_sum += P_B;
                     }
         }
 
-        dP_B_dG_sum[0] += dP_G_dG[0] * P_G;
-        dP_B_dG_sum[1] += dP_G_dG[1] * P_G;
-        dP_B_dG_sum[2] += dP_G_dG[2] * P_G;
+        // $$\sum_{\vec{P}_3 \in Z^3} \frac{\partial P^{PBC}(\vec{G} + \vec{P}_3, \vec{r}) }{\partial \vec{G}}$$
 
-        // Combine the two pieces
+        double dP_G_dG_sum[3] { 0.0, 0.0, 0.0 };
+        for (int i_image2_x = -image1_negative_bound[0]; i_image2_x <= image1_positive_bound[0]; i_image2_x++)
+            for (int i_image2_y = -image1_negative_bound[1]; i_image2_y <= image1_positive_bound[1]; i_image2_y++)
+                for (int i_image2_z = -image1_negative_bound[2]; i_image2_z <= image1_positive_bound[2]; i_image2_z++) {
+                    double lattice_image_g[3];
+                    periodic_data.get_absolute_coord_real(lattice_image_g, i_image2_x, i_image2_y, i_image2_z);
+                    const double atom_g_image[3] = { atom_g[0] + lattice_image_g[0], atom_g[1] + lattice_image_g[1], atom_g[2] + lattice_image_g[2] };
+
+                    const double P_G = compute_P_A(atom_g_image, i_derivative_atom, point, n_atom, d_atoms,
+                                                   d_interatomic_quantities, switch_function_threshold, image_cutoff_radius, periodic_data);
+                    if (P_G < switch_function_threshold)
+                        continue;
+                    P_B_sum += P_G;
+
+                    const double rG = get_r(atom_g_image[0], atom_g_image[1], atom_g_image[2], point[0], point[1], point[2]);
+
+                    double dP_G_dG[3] { 0.0, 0.0, 0.0 };
+                    for (int i_atom_b = 0; i_atom_b < n_atom; i_atom_b++) {
+                        double atom_b[3] { d_atoms[i_atom_b].x, d_atoms[i_atom_b].y, d_atoms[i_atom_b].z };
+                        periodic_data.move_to_same_image(atom_a, atom_b);
+
+                        const double a_BG = d_interatomic_quantities[i_atom_b * n_atom + i_derivative_atom];
+
+                        const double BG_without_offset[3] { atom_b[0] - atom_g[0], atom_b[1] - atom_g[1], atom_b[2] - atom_g[2] };
+                        int image3_positive_bound[3] { 0, 0, 0 };
+                        int image3_negative_bound[3] { 0, 0, 0 };
+                        periodic_data.get_cube_bound_real(image3_positive_bound, image3_negative_bound, BG_without_offset, image_cutoff_radius);
+
+                        for (int i_image3_x = -image3_negative_bound[0]; i_image3_x <= image3_positive_bound[0]; i_image3_x++)
+                            for (int i_image3_y = -image3_negative_bound[1]; i_image3_y <= image3_positive_bound[1]; i_image3_y++)
+                                for (int i_image3_z = -image3_negative_bound[2]; i_image3_z <= image3_positive_bound[2]; i_image3_z++) {
+                                    double lattice_image_b[3];
+                                    periodic_data.get_absolute_coord_real(lattice_image_b, i_image3_x, i_image3_y, i_image3_z);
+                                    const double atom_b_image[3] = { atom_b[0] + lattice_image_b[0], atom_b[1] + lattice_image_b[1], atom_b[2] + lattice_image_b[2] };
+
+                                    const double one_over_BG = get_one_over_r(atom_b_image[0], atom_b_image[1], atom_b_image[2], atom_g_image[0], atom_g_image[1], atom_g_image[2]);
+                                    const double rB = get_r(atom_b_image[0], atom_b_image[1], atom_b_image[2], point[0], point[1], point[2]);
+                                    const double mu = (rG - rB) * one_over_BG;
+
+                                    const double dsdmu_over_s = switch_function_dsdmu_over_s(mu, a_BG);
+                                    const double3 dmuGBdG = smooth_function_dmudB(atom_g_image, atom_b_image, point, a_BG, i_atom_b == i_derivative_atom);
+                                    if (!(i_atom_b == i_derivative_atom && i_image3_x == i_image2_x && i_image3_y == i_image2_y && i_image3_z == i_image2_z)) {
+                                        dP_G_dG[0] += dsdmu_over_s * dmuGBdG.x;
+                                        dP_G_dG[1] += dsdmu_over_s * dmuGBdG.y;
+                                        dP_G_dG[2] += dsdmu_over_s * dmuGBdG.z;
+                                    }
+                                }
+                    }
+
+                    dP_G_dG[0] *= P_G;
+                    dP_G_dG[1] *= P_G;
+                    dP_G_dG[2] *= P_G;
+                    dP_G_dG_sum[0] += dP_G_dG[0];
+                    dP_G_dG_sum[1] += dP_G_dG[1];
+                    dP_G_dG_sum[2] += dP_G_dG[2];
+                }
+
+        // Combine the three pieces
+
+        dP_B_dG_sum[0] += dP_G_dG_sum[0];
+        dP_B_dG_sum[1] += dP_G_dG_sum[1];
+        dP_B_dG_sum[2] += dP_G_dG_sum[2];
 
         const double point_weight = d_point_w[i_point];
         // Henry 20250302: I don't understand the overall negative sign.
