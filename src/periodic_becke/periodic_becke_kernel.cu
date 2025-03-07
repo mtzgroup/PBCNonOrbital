@@ -304,7 +304,7 @@ namespace PeriodicBox
         int image1_negative_bound[3] { 0, 0, 0 };
         periodic_data.get_cube_bound_real(image1_positive_bound, image1_negative_bound, G_to_reference, image_cutoff_radius);
 
-        const double P_A = compute_P_A(atom_a, i_center_atom, point, atom_a, n_atom, d_atoms,
+        const double P_A = compute_P_A(atom_a, i_center_atom, point, reference_image, n_atom, d_atoms,
                                        d_interatomic_quantities, switch_function_threshold, image_cutoff_radius, periodic_data);
         if (P_A < switch_function_threshold) {
             d_gradient_cache_x[i_point + i_derivative_atom * n_point_per_grid] = 0.0;
@@ -363,7 +363,7 @@ namespace PeriodicBox
                         periodic_data.get_absolute_coord_real(lattice_image_b, i_image3_x, i_image3_y, i_image3_z);
                         const double atom_b_image[3] = { atom_b[0] + lattice_image_b[0], atom_b[1] + lattice_image_b[1], atom_b[2] + lattice_image_b[2] };
 
-                        const double P_B = compute_P_A(atom_b_image, i_atom_b, point, atom_a, n_atom, d_atoms,
+                        const double P_B = compute_P_A(atom_b_image, i_atom_b, point, reference_image, n_atom, d_atoms,
                                                        d_interatomic_quantities, switch_function_threshold, image_cutoff_radius, periodic_data);
                         if (P_B < switch_function_threshold)
                             continue;
@@ -412,7 +412,7 @@ namespace PeriodicBox
                     periodic_data.get_absolute_coord_real(lattice_image_g, i_image2_x, i_image2_y, i_image2_z);
                     const double atom_g_image[3] = { atom_g[0] + lattice_image_g[0], atom_g[1] + lattice_image_g[1], atom_g[2] + lattice_image_g[2] };
 
-                    const double P_G = compute_P_A(atom_g_image, i_derivative_atom, point, atom_a, n_atom, d_atoms,
+                    const double P_G = compute_P_A(atom_g_image, i_derivative_atom, point, reference_image, n_atom, d_atoms,
                                                    d_interatomic_quantities, switch_function_threshold, image_cutoff_radius, periodic_data);
                     if (P_G < switch_function_threshold)
                         continue;
