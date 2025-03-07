@@ -7,7 +7,8 @@
 
 #include <math.h>
 
-#define FABS_MAX(X, Y) ((fabs(X) > fabs(Y)) ? fabs(X) : fabs(Y))
+#define MAX(X, Y) (((X) > (Y)) ? (X) : (Y))
+#define MIN(X, Y) (((X) < (Y)) ? (X) : (Y))
 #define CAST(x) (static_cast<FloatType>(x))
 
 namespace PeriodicBox
@@ -46,7 +47,9 @@ namespace PeriodicBox
       absolute[2] = lattice_reciprocal_[2] * i_x + lattice_reciprocal_[5] * i_y + lattice_reciprocal_[8] * i_z;
     }
 
-    __device__ void get_min_norm_lattice_image_real(FloatType v[3]) const
+    // Henry 20250307: Notice this is not a strict integer least square solution, it's an approximation.
+    __device__
+    void get_min_norm_lattice_image_real(FloatType v[3]) const
     {
       const FloatType lattice_index_with_fraction[3] {
         CAST(0.5 / PI) * (lattice_reciprocal_[0] * v[0] + lattice_reciprocal_[1] * v[1] + lattice_reciprocal_[2] * v[2]),
@@ -69,48 +72,256 @@ namespace PeriodicBox
     __device__
     void get_cube_bound_general(int positive_bound[3], int negative_bound[3], const FloatType origin_offset_absolute[3], const FloatType radius, const FloatType P_inverse[9]) const
     {
-      const FloatType positive_direction_standard_basis[3] {
-        radius - origin_offset_absolute[0],
-        radius - origin_offset_absolute[1],
-        radius - origin_offset_absolute[2],
-      };
-      const FloatType negative_direction_standard_basis[9] {
-        -radius - origin_offset_absolute[0],
-        -radius - origin_offset_absolute[1],
-        -radius - origin_offset_absolute[2],
-      };
+      FloatType positive_bound_index_space[3] { -1e38, -1e38, -1e38 };
+      FloatType negative_bound_index_space[3] {  1e38,  1e38,  1e38 };
 
-      const FloatType positive_direction_lattice_basis[9] {
-        P_inverse[0] * positive_direction_standard_basis[0],
-        P_inverse[1] * positive_direction_standard_basis[0],
-        P_inverse[2] * positive_direction_standard_basis[0],
-        P_inverse[3] * positive_direction_standard_basis[1],
-        P_inverse[4] * positive_direction_standard_basis[1],
-        P_inverse[5] * positive_direction_standard_basis[1],
-        P_inverse[6] * positive_direction_standard_basis[2],
-        P_inverse[7] * positive_direction_standard_basis[2],
-        P_inverse[8] * positive_direction_standard_basis[2],
-      };
-      const FloatType negative_direction_lattice_basis[9] {
-        P_inverse[0] * negative_direction_standard_basis[0],
-        P_inverse[1] * negative_direction_standard_basis[0],
-        P_inverse[2] * negative_direction_standard_basis[0],
-        P_inverse[3] * negative_direction_standard_basis[1],
-        P_inverse[4] * negative_direction_standard_basis[1],
-        P_inverse[5] * negative_direction_standard_basis[1],
-        P_inverse[6] * negative_direction_standard_basis[2],
-        P_inverse[7] * negative_direction_standard_basis[2],
-        P_inverse[8] * negative_direction_standard_basis[2],
-      };
-
-      for (int i = 0; i < 3; i++)
       {
-        positive_bound[i] = (int) ceil(FABS_MAX(FABS_MAX(positive_direction_lattice_basis[i + 0],
-                                                         positive_direction_lattice_basis[i + 3]),
-                                                         positive_direction_lattice_basis[i + 6]));
-        negative_bound[i] = (int) ceil(FABS_MAX(FABS_MAX(negative_direction_lattice_basis[i + 0],
-                                                         negative_direction_lattice_basis[i + 3]),
-                                                         negative_direction_lattice_basis[i + 6]));
+        const FloatType cube_corner[3] {
+          -origin_offset_absolute[0] + radius,
+          -origin_offset_absolute[1] + radius,
+          -origin_offset_absolute[2] + radius,
+        };
+
+        const FloatType cube_corner_index_space[9] {
+          P_inverse[0] * cube_corner[0],
+          P_inverse[1] * cube_corner[0],
+          P_inverse[2] * cube_corner[0],
+          P_inverse[3] * cube_corner[1],
+          P_inverse[4] * cube_corner[1],
+          P_inverse[5] * cube_corner[1],
+          P_inverse[6] * cube_corner[2],
+          P_inverse[7] * cube_corner[2],
+          P_inverse[8] * cube_corner[2],
+        };
+
+        for (int i = 0; i < 3; i++) {
+          const FloatType corner_positive_bound = MAX(MAX(cube_corner_index_space[i + 0],
+                                                          cube_corner_index_space[i + 3]),
+                                                          cube_corner_index_space[i + 6]);
+          positive_bound_index_space[i] = MAX(positive_bound_index_space[i], corner_positive_bound);
+          const FloatType corner_negative_bound = MIN(MIN(cube_corner_index_space[i + 0],
+                                                          cube_corner_index_space[i + 3]),
+                                                          cube_corner_index_space[i + 6]);
+          negative_bound_index_space[i] = MIN(negative_bound_index_space[i], corner_negative_bound);
+        }
+      }
+      {
+        const FloatType cube_corner[3] {
+          -origin_offset_absolute[0] - radius,
+          -origin_offset_absolute[1] + radius,
+          -origin_offset_absolute[2] + radius,
+        };
+
+        const FloatType cube_corner_index_space[9] {
+          P_inverse[0] * cube_corner[0],
+          P_inverse[1] * cube_corner[0],
+          P_inverse[2] * cube_corner[0],
+          P_inverse[3] * cube_corner[1],
+          P_inverse[4] * cube_corner[1],
+          P_inverse[5] * cube_corner[1],
+          P_inverse[6] * cube_corner[2],
+          P_inverse[7] * cube_corner[2],
+          P_inverse[8] * cube_corner[2],
+        };
+
+        for (int i = 0; i < 3; i++) {
+          const FloatType corner_positive_bound = MAX(MAX(cube_corner_index_space[i + 0],
+                                                          cube_corner_index_space[i + 3]),
+                                                          cube_corner_index_space[i + 6]);
+          positive_bound_index_space[i] = MAX(positive_bound_index_space[i], corner_positive_bound);
+          const FloatType corner_negative_bound = MIN(MIN(cube_corner_index_space[i + 0],
+                                                          cube_corner_index_space[i + 3]),
+                                                          cube_corner_index_space[i + 6]);
+          negative_bound_index_space[i] = MIN(negative_bound_index_space[i], corner_negative_bound);
+        }
+      }
+      {
+        const FloatType cube_corner[3] {
+          -origin_offset_absolute[0] + radius,
+          -origin_offset_absolute[1] - radius,
+          -origin_offset_absolute[2] + radius,
+        };
+
+        const FloatType cube_corner_index_space[9] {
+          P_inverse[0] * cube_corner[0],
+          P_inverse[1] * cube_corner[0],
+          P_inverse[2] * cube_corner[0],
+          P_inverse[3] * cube_corner[1],
+          P_inverse[4] * cube_corner[1],
+          P_inverse[5] * cube_corner[1],
+          P_inverse[6] * cube_corner[2],
+          P_inverse[7] * cube_corner[2],
+          P_inverse[8] * cube_corner[2],
+        };
+
+        for (int i = 0; i < 3; i++) {
+          const FloatType corner_positive_bound = MAX(MAX(cube_corner_index_space[i + 0],
+                                                          cube_corner_index_space[i + 3]),
+                                                          cube_corner_index_space[i + 6]);
+          positive_bound_index_space[i] = MAX(positive_bound_index_space[i], corner_positive_bound);
+          const FloatType corner_negative_bound = MIN(MIN(cube_corner_index_space[i + 0],
+                                                          cube_corner_index_space[i + 3]),
+                                                          cube_corner_index_space[i + 6]);
+          negative_bound_index_space[i] = MIN(negative_bound_index_space[i], corner_negative_bound);
+        }
+      }
+      {
+        const FloatType cube_corner[3] {
+          -origin_offset_absolute[0] + radius,
+          -origin_offset_absolute[1] + radius,
+          -origin_offset_absolute[2] - radius,
+        };
+
+        const FloatType cube_corner_index_space[9] {
+          P_inverse[0] * cube_corner[0],
+          P_inverse[1] * cube_corner[0],
+          P_inverse[2] * cube_corner[0],
+          P_inverse[3] * cube_corner[1],
+          P_inverse[4] * cube_corner[1],
+          P_inverse[5] * cube_corner[1],
+          P_inverse[6] * cube_corner[2],
+          P_inverse[7] * cube_corner[2],
+          P_inverse[8] * cube_corner[2],
+        };
+
+        for (int i = 0; i < 3; i++) {
+          const FloatType corner_positive_bound = MAX(MAX(cube_corner_index_space[i + 0],
+                                                          cube_corner_index_space[i + 3]),
+                                                          cube_corner_index_space[i + 6]);
+          positive_bound_index_space[i] = MAX(positive_bound_index_space[i], corner_positive_bound);
+          const FloatType corner_negative_bound = MIN(MIN(cube_corner_index_space[i + 0],
+                                                          cube_corner_index_space[i + 3]),
+                                                          cube_corner_index_space[i + 6]);
+          negative_bound_index_space[i] = MIN(negative_bound_index_space[i], corner_negative_bound);
+        }
+      }
+      {
+        const FloatType cube_corner[3] {
+          -origin_offset_absolute[0] - radius,
+          -origin_offset_absolute[1] - radius,
+          -origin_offset_absolute[2] + radius,
+        };
+
+        const FloatType cube_corner_index_space[9] {
+          P_inverse[0] * cube_corner[0],
+          P_inverse[1] * cube_corner[0],
+          P_inverse[2] * cube_corner[0],
+          P_inverse[3] * cube_corner[1],
+          P_inverse[4] * cube_corner[1],
+          P_inverse[5] * cube_corner[1],
+          P_inverse[6] * cube_corner[2],
+          P_inverse[7] * cube_corner[2],
+          P_inverse[8] * cube_corner[2],
+        };
+
+        for (int i = 0; i < 3; i++) {
+          const FloatType corner_positive_bound = MAX(MAX(cube_corner_index_space[i + 0],
+                                                          cube_corner_index_space[i + 3]),
+                                                          cube_corner_index_space[i + 6]);
+          positive_bound_index_space[i] = MAX(positive_bound_index_space[i], corner_positive_bound);
+          const FloatType corner_negative_bound = MIN(MIN(cube_corner_index_space[i + 0],
+                                                          cube_corner_index_space[i + 3]),
+                                                          cube_corner_index_space[i + 6]);
+          negative_bound_index_space[i] = MIN(negative_bound_index_space[i], corner_negative_bound);
+        }
+      }
+      {
+        const FloatType cube_corner[3] {
+          -origin_offset_absolute[0] - radius,
+          -origin_offset_absolute[1] + radius,
+          -origin_offset_absolute[2] - radius,
+        };
+
+        const FloatType cube_corner_index_space[9] {
+          P_inverse[0] * cube_corner[0],
+          P_inverse[1] * cube_corner[0],
+          P_inverse[2] * cube_corner[0],
+          P_inverse[3] * cube_corner[1],
+          P_inverse[4] * cube_corner[1],
+          P_inverse[5] * cube_corner[1],
+          P_inverse[6] * cube_corner[2],
+          P_inverse[7] * cube_corner[2],
+          P_inverse[8] * cube_corner[2],
+        };
+
+        for (int i = 0; i < 3; i++) {
+          const FloatType corner_positive_bound = MAX(MAX(cube_corner_index_space[i + 0],
+                                                          cube_corner_index_space[i + 3]),
+                                                          cube_corner_index_space[i + 6]);
+          positive_bound_index_space[i] = MAX(positive_bound_index_space[i], corner_positive_bound);
+          const FloatType corner_negative_bound = MIN(MIN(cube_corner_index_space[i + 0],
+                                                          cube_corner_index_space[i + 3]),
+                                                          cube_corner_index_space[i + 6]);
+          negative_bound_index_space[i] = MIN(negative_bound_index_space[i], corner_negative_bound);
+        }
+      }
+      {
+        const FloatType cube_corner[3] {
+          -origin_offset_absolute[0] + radius,
+          -origin_offset_absolute[1] - radius,
+          -origin_offset_absolute[2] - radius,
+        };
+
+        const FloatType cube_corner_index_space[9] {
+          P_inverse[0] * cube_corner[0],
+          P_inverse[1] * cube_corner[0],
+          P_inverse[2] * cube_corner[0],
+          P_inverse[3] * cube_corner[1],
+          P_inverse[4] * cube_corner[1],
+          P_inverse[5] * cube_corner[1],
+          P_inverse[6] * cube_corner[2],
+          P_inverse[7] * cube_corner[2],
+          P_inverse[8] * cube_corner[2],
+        };
+
+        for (int i = 0; i < 3; i++) {
+          const FloatType corner_positive_bound = MAX(MAX(cube_corner_index_space[i + 0],
+                                                          cube_corner_index_space[i + 3]),
+                                                          cube_corner_index_space[i + 6]);
+          positive_bound_index_space[i] = MAX(positive_bound_index_space[i], corner_positive_bound);
+          const FloatType corner_negative_bound = MIN(MIN(cube_corner_index_space[i + 0],
+                                                          cube_corner_index_space[i + 3]),
+                                                          cube_corner_index_space[i + 6]);
+          negative_bound_index_space[i] = MIN(negative_bound_index_space[i], corner_negative_bound);
+        }
+      }
+      {
+        const FloatType cube_corner[3] {
+          -origin_offset_absolute[0] - radius,
+          -origin_offset_absolute[1] - radius,
+          -origin_offset_absolute[2] - radius,
+        };
+
+        const FloatType cube_corner_index_space[9] {
+          P_inverse[0] * cube_corner[0],
+          P_inverse[1] * cube_corner[0],
+          P_inverse[2] * cube_corner[0],
+          P_inverse[3] * cube_corner[1],
+          P_inverse[4] * cube_corner[1],
+          P_inverse[5] * cube_corner[1],
+          P_inverse[6] * cube_corner[2],
+          P_inverse[7] * cube_corner[2],
+          P_inverse[8] * cube_corner[2],
+        };
+
+        for (int i = 0; i < 3; i++) {
+          const FloatType corner_positive_bound = MAX(MAX(cube_corner_index_space[i + 0],
+                                                          cube_corner_index_space[i + 3]),
+                                                          cube_corner_index_space[i + 6]);
+          positive_bound_index_space[i] = MAX(positive_bound_index_space[i], corner_positive_bound);
+          const FloatType corner_negative_bound = MIN(MIN(cube_corner_index_space[i + 0],
+                                                          cube_corner_index_space[i + 3]),
+                                                          cube_corner_index_space[i + 6]);
+          negative_bound_index_space[i] = MIN(negative_bound_index_space[i], corner_negative_bound);
+        }
+      }
+
+      for (int i = 0; i < 3; i++) {
+        positive_bound[i] = (int) ceil(positive_bound_index_space[i]);
+        negative_bound[i] = (int)floor(negative_bound_index_space[i]);
+      }
+      for (int i = 0; i < 3; i++) {
+        negative_bound[i] *= -1;
       }
     }
 #endif

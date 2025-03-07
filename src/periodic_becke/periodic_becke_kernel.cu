@@ -16,6 +16,7 @@ namespace PeriodicBox
     static __device__ double get_one_over_r(double x1, double y1, double z1, double x2, double y2, double z2)
     {
         const double r = get_r(x1, y1, z1, x2, y2, z2);
+        // Notice the logic to remove r == 0 is critical, this is the way we remove A == B && P1 == P2
         return (r > DIVIDE_BY_ZERO_PROTECTION_THRESHOLD) ? (1.0 / r) : 0.0;
     }
 
@@ -81,18 +82,15 @@ namespace PeriodicBox
                                         periodic_data.get_absolute_coord_real(lattice_image_2, i_image2_x, i_image2_y, i_image2_z);
                                         const double atom_image_2[3] = { atom_2[0] + lattice_image_2[0], atom_2[1] + lattice_image_2[1], atom_2[2] + lattice_image_2[2] };
 
-                                        if ( (i_atom_1 != i_atom_2) ||
-                                            !(i_image1_x == i_image2_x && i_image1_y == i_image2_y && i_image1_z == i_image2_z) ) {
-                                            const double one_over_rab = get_one_over_r(atom_image_1[0], atom_image_1[1], atom_image_1[2], atom_image_2[0], atom_image_2[1], atom_image_2[2]);
-                                            const double rb = get_r(atom_image_2[0], atom_image_2[1], atom_image_2[2], point[0], point[1], point[2]);
-                                            const double mu = (ra - rb) * one_over_rab;
-                                            // Refer to equation A2 in the original Becke paper for the next equation
-                                            const double nu = mu + a_ab * (1.0 - mu * mu);
-                                            p_b *= switch_function(nu);
-                                            if (p_b < switch_function_threshold) {
-                                                p_b = 0.0;
-                                                goto jump_out_atom2_image_loop;
-                                            }
+                                        const double one_over_rab = get_one_over_r(atom_image_1[0], atom_image_1[1], atom_image_1[2], atom_image_2[0], atom_image_2[1], atom_image_2[2]);
+                                        const double rb = get_r(atom_image_2[0], atom_image_2[1], atom_image_2[2], point[0], point[1], point[2]);
+                                        const double mu = (ra - rb) * one_over_rab;
+                                        // Refer to equation A2 in the original Becke paper for the next equation
+                                        const double nu = mu + a_ab * (1.0 - mu * mu);
+                                        p_b *= switch_function(nu);
+                                        if (p_b < switch_function_threshold) {
+                                            p_b = 0.0;
+                                            goto jump_out_atom2_image_loop;
                                         }
                                     }
                         }
@@ -233,7 +231,8 @@ namespace PeriodicBox
     }
 
     // Note: This value cannot be cached, because atom_a can be any image of i_atom_a.
-    static __device__ double compute_P_A(const double* atom_a, const int i_atom_a, const double* point,
+    static __device__ double compute_P_A(const double* atom_a, const int i_atom_a,
+                                         const double* point, const double* reference_image,
                                          const int n_atom,
                                          const float4* d_atoms,
                                          const double* d_interatomic_quantities, const double switch_function_threshold,
@@ -245,9 +244,9 @@ namespace PeriodicBox
         for (int i_atom_b = 0; i_atom_b < n_atom; i_atom_b++) {
             const double a_ab = d_interatomic_quantities[i_atom_a * n_atom + i_atom_b];
             double atom_b[3] = { d_atoms[i_atom_b].x, d_atoms[i_atom_b].y, d_atoms[i_atom_b].z };
-            periodic_data.move_to_same_image(atom_a, atom_b);
+            periodic_data.move_to_same_image(reference_image, atom_b);
 
-            const double atom_b_to_reference[3] { atom_b[0] - atom_a[0], atom_b[1] - atom_a[1], atom_b[2] - atom_a[2] };
+            const double atom_b_to_reference[3] { atom_b[0] - reference_image[0], atom_b[1] - reference_image[1], atom_b[2] - reference_image[2] };
             int image2_positive_bound[3] { 0, 0, 0 };
             int image2_negative_bound[3] { 0, 0, 0 };
             periodic_data.get_cube_bound_real(image2_positive_bound, image2_negative_bound, atom_b_to_reference, image_cutoff_radius);
@@ -259,17 +258,14 @@ namespace PeriodicBox
                         periodic_data.get_absolute_coord_real(lattice_image_b, i_image2_x, i_image2_y, i_image2_z);
                         const double atom_image_b[3] = { atom_b[0] + lattice_image_b[0], atom_b[1] + lattice_image_b[1], atom_b[2] + lattice_image_b[2] };
 
-                        if ( (i_atom_a != i_atom_b) ||
-                            !(i_image2_x == 0 && i_image2_y == 0 && i_image2_z == 0) ) {
-                            const double one_over_rab = get_one_over_r(atom_a[0], atom_a[1], atom_a[2], atom_image_b[0], atom_image_b[1], atom_image_b[2]);
-                            const double rb = get_r(atom_image_b[0], atom_image_b[1], atom_image_b[2], point[0], point[1], point[2]);
-                            const double mu = (ra - rb) * one_over_rab;
-                            // Refer to equation A2 in the original Becke paper for the next equation
-                            const double nu = mu + a_ab * (1.0 - mu * mu);
-                            p_a *= switch_function(nu);
-                            if (p_a < switch_function_threshold) {
-                                return 0.0;
-                            }
+                        const double one_over_rab = get_one_over_r(atom_a[0], atom_a[1], atom_a[2], atom_image_b[0], atom_image_b[1], atom_image_b[2]);
+                        const double rb = get_r(atom_image_b[0], atom_image_b[1], atom_image_b[2], point[0], point[1], point[2]);
+                        const double mu = (ra - rb) * one_over_rab;
+                        // Refer to equation A2 in the original Becke paper for the next equation
+                        const double nu = mu + a_ab * (1.0 - mu * mu);
+                        p_a *= switch_function(nu);
+                        if (p_a < switch_function_threshold) {
+                            return 0.0;
                         }
                     }
         }
@@ -294,20 +290,21 @@ namespace PeriodicBox
 
         const double point[3] { d_point_x[i_point], d_point_y[i_point], d_point_z[i_point]};
         const double atom_a[3] { d_atoms[i_center_atom].x, d_atoms[i_center_atom].y, d_atoms[i_center_atom].z };
+        const double* reference_image = atom_a;
         double atom_g[3] { d_atoms[i_derivative_atom].x, d_atoms[i_derivative_atom].y, d_atoms[i_derivative_atom].z };
-        periodic_data.move_to_same_image(atom_a, atom_g);
+        periodic_data.move_to_same_image(reference_image, atom_g);
 
         // $$\frac{\partial P^{PBC}(\vec{A}, \vec{r})}{\partial \vec{G}}$$
 
         const double rA = get_r(atom_a[0], atom_a[1], atom_a[2], point[0], point[1], point[2]);
         const double a_AG = d_interatomic_quantities[i_center_atom * n_atom + i_derivative_atom];
 
-        const double AG_without_offset[3] { atom_g[0] - atom_a[0], atom_g[1] - atom_a[1], atom_g[2] - atom_a[2] };
+        const double G_to_reference[3] { atom_g[0] - reference_image[0], atom_g[1] - reference_image[1], atom_g[2] - reference_image[2] };
         int image1_positive_bound[3] { 0, 0, 0 };
         int image1_negative_bound[3] { 0, 0, 0 };
-        periodic_data.get_cube_bound_real(image1_positive_bound, image1_negative_bound, AG_without_offset, image_cutoff_radius);
+        periodic_data.get_cube_bound_real(image1_positive_bound, image1_negative_bound, G_to_reference, image_cutoff_radius);
 
-        const double P_A = compute_P_A(atom_a, i_center_atom, point, n_atom, d_atoms,
+        const double P_A = compute_P_A(atom_a, i_center_atom, point, atom_a, n_atom, d_atoms,
                                        d_interatomic_quantities, switch_function_threshold, image_cutoff_radius, periodic_data);
         if (P_A < switch_function_threshold) {
             d_gradient_cache_x[i_point + i_derivative_atom * n_point_per_grid] = 0.0;
@@ -350,14 +347,14 @@ namespace PeriodicBox
                 continue;
 
             double atom_b[3] { d_atoms[i_atom_b].x, d_atoms[i_atom_b].y, d_atoms[i_atom_b].z };
-            periodic_data.move_to_same_image(atom_a, atom_b);
+            periodic_data.move_to_same_image(reference_image, atom_b);
 
             const double a_BG = d_interatomic_quantities[i_atom_b * n_atom + i_derivative_atom];
 
-            const double BG_without_offset[3] { atom_g[0] - atom_b[0], atom_g[1] - atom_b[1], atom_g[2] - atom_b[2] };
+            const double B_to_reference[3] { atom_b[0] - reference_image[0], atom_b[1] - reference_image[1], atom_b[2] - reference_image[2] };
             int image3_positive_bound[3] { 0, 0, 0 };
             int image3_negative_bound[3] { 0, 0, 0 };
-            periodic_data.get_cube_bound_real(image3_positive_bound, image3_negative_bound, BG_without_offset, image_cutoff_radius);
+            periodic_data.get_cube_bound_real(image3_positive_bound, image3_negative_bound, B_to_reference, image_cutoff_radius);
 
             for (int i_image3_x = -image3_negative_bound[0]; i_image3_x <= image3_positive_bound[0]; i_image3_x++)
                 for (int i_image3_y = -image3_negative_bound[1]; i_image3_y <= image3_positive_bound[1]; i_image3_y++)
@@ -366,7 +363,7 @@ namespace PeriodicBox
                         periodic_data.get_absolute_coord_real(lattice_image_b, i_image3_x, i_image3_y, i_image3_z);
                         const double atom_b_image[3] = { atom_b[0] + lattice_image_b[0], atom_b[1] + lattice_image_b[1], atom_b[2] + lattice_image_b[2] };
 
-                        const double P_B = compute_P_A(atom_b_image, i_atom_b, point, n_atom, d_atoms,
+                        const double P_B = compute_P_A(atom_b_image, i_atom_b, point, atom_a, n_atom, d_atoms,
                                                        d_interatomic_quantities, switch_function_threshold, image_cutoff_radius, periodic_data);
                         if (P_B < switch_function_threshold)
                             continue;
@@ -374,10 +371,13 @@ namespace PeriodicBox
 
                         const double rB = get_r(atom_b_image[0], atom_b_image[1], atom_b_image[2], point[0], point[1], point[2]);
 
+                        const int* image2_positive_bound = image1_positive_bound;
+                        const int* image2_negative_bound = image1_negative_bound;
+
                         double dP_B_dG[3] { 0.0, 0.0, 0.0 };
-                        for (int i_image2_x = -image3_negative_bound[0]; i_image2_x <= image3_positive_bound[0]; i_image2_x++)
-                            for (int i_image2_y = -image3_negative_bound[1]; i_image2_y <= image3_positive_bound[1]; i_image2_y++)
-                                for (int i_image2_z = -image3_negative_bound[2]; i_image2_z <= image3_positive_bound[2]; i_image2_z++) {
+                        for (int i_image2_x = -image2_negative_bound[0]; i_image2_x <= image2_positive_bound[0]; i_image2_x++)
+                            for (int i_image2_y = -image2_negative_bound[1]; i_image2_y <= image2_positive_bound[1]; i_image2_y++)
+                                for (int i_image2_z = -image2_negative_bound[2]; i_image2_z <= image2_positive_bound[2]; i_image2_z++) {
                                     double lattice_image_g[3];
                                     periodic_data.get_absolute_coord_real(lattice_image_g, i_image2_x, i_image2_y, i_image2_z);
                                     const double atom_g_image[3] = { atom_g[0] + lattice_image_g[0], atom_g[1] + lattice_image_g[1], atom_g[2] + lattice_image_g[2] };
@@ -412,7 +412,7 @@ namespace PeriodicBox
                     periodic_data.get_absolute_coord_real(lattice_image_g, i_image2_x, i_image2_y, i_image2_z);
                     const double atom_g_image[3] = { atom_g[0] + lattice_image_g[0], atom_g[1] + lattice_image_g[1], atom_g[2] + lattice_image_g[2] };
 
-                    const double P_G = compute_P_A(atom_g_image, i_derivative_atom, point, n_atom, d_atoms,
+                    const double P_G = compute_P_A(atom_g_image, i_derivative_atom, point, atom_a, n_atom, d_atoms,
                                                    d_interatomic_quantities, switch_function_threshold, image_cutoff_radius, periodic_data);
                     if (P_G < switch_function_threshold)
                         continue;
@@ -423,14 +423,14 @@ namespace PeriodicBox
                     double dP_G_dG[3] { 0.0, 0.0, 0.0 };
                     for (int i_atom_b = 0; i_atom_b < n_atom; i_atom_b++) {
                         double atom_b[3] { d_atoms[i_atom_b].x, d_atoms[i_atom_b].y, d_atoms[i_atom_b].z };
-                        periodic_data.move_to_same_image(atom_a, atom_b);
+                        periodic_data.move_to_same_image(reference_image, atom_b);
 
                         const double a_GB = d_interatomic_quantities[i_derivative_atom * n_atom + i_atom_b];
 
-                        const double BG_without_offset[3] { atom_b[0] - atom_g[0], atom_b[1] - atom_g[1], atom_b[2] - atom_g[2] };
+                        const double B_to_reference[3] { atom_b[0] - reference_image[0], atom_b[1] - reference_image[1], atom_b[2] - reference_image[2] };
                         int image3_positive_bound[3] { 0, 0, 0 };
                         int image3_negative_bound[3] { 0, 0, 0 };
-                        periodic_data.get_cube_bound_real(image3_positive_bound, image3_negative_bound, BG_without_offset, image_cutoff_radius);
+                        periodic_data.get_cube_bound_real(image3_positive_bound, image3_negative_bound, B_to_reference, image_cutoff_radius);
 
                         for (int i_image3_x = -image3_negative_bound[0]; i_image3_x <= image3_positive_bound[0]; i_image3_x++)
                             for (int i_image3_y = -image3_negative_bound[1]; i_image3_y <= image3_positive_bound[1]; i_image3_y++)
@@ -445,11 +445,9 @@ namespace PeriodicBox
 
                                     const double dsdmu_over_s = switch_function_dsdmu_over_s(mu, a_GB);
                                     const double3 dmuGBdG = smooth_function_dmudA(atom_g_image, atom_b_image, point, a_GB, i_atom_b == i_derivative_atom);
-                                    if (!(i_atom_b == i_derivative_atom && i_image3_x == i_image2_x && i_image3_y == i_image2_y && i_image3_z == i_image2_z)) {
-                                        dP_G_dG[0] += dsdmu_over_s * dmuGBdG.x;
-                                        dP_G_dG[1] += dsdmu_over_s * dmuGBdG.y;
-                                        dP_G_dG[2] += dsdmu_over_s * dmuGBdG.z;
-                                    }
+                                    dP_G_dG[0] += dsdmu_over_s * dmuGBdG.x;
+                                    dP_G_dG[1] += dsdmu_over_s * dmuGBdG.y;
+                                    dP_G_dG[2] += dsdmu_over_s * dmuGBdG.z;
                                 }
                     }
 
