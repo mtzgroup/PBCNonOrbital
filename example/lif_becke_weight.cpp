@@ -4,7 +4,6 @@
 #include "../src/periodic_becke/periodic_becke.h"
 
 #include <string.h>
-#include <algorithm>
 
 double becke_energy(const int n_point, const PeriodicBox::GridPoint* points, const double* epsilon_xc)
 {
@@ -2165,8 +2164,6 @@ int main()
     grid_points[2111].x =  -1.2263012757; grid_points[2111].y =  -1.2263012757; grid_points[2111].z =   6.7636746939; grid_points[2111].w_fixed =    1.0767762850; grid_points[2111].w_total = 0.0058282274; grid_points[2111].i_atom = 1;
     grid_points[2112].x =   0.0000000000; grid_points[2112].y =   0.0000000000; grid_points[2112].z =   8.4134800364; grid_points[2112].w_fixed =    3.8023976811; grid_points[2112].w_total = 0.0000000004; grid_points[2112].i_atom = 1;
     grid_points[2113].x =   7.5660149734; grid_points[2113].y =  -2.5220049911; grid_points[2113].z =   6.7171966839; grid_points[2113].w_fixed =   55.2891360098; grid_points[2113].w_total = 0.0000000000; grid_points[2113].i_atom = 1;
-
-    std::stable_sort(grid_points, grid_points + n_grid_point, [](const PeriodicBox::GridPoint& a, const PeriodicBox::GridPoint& b) { return a.i_atom < b.i_atom; });
 
     const double epsilon_xc[n_grid_point] {
         -0.0000269544,
